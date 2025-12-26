@@ -1447,7 +1447,7 @@ tl::expected<void, ErrorCode> Client::MountSegment(const void* buffer,
             return tl::unexpected(ErrorCode::INVALID_PARAMS);
         }
     }
-
+#ifndef USE_MEMFABRIC
     int rc = transfer_engine_->registerLocalMemory(
         (void*)buffer, size, kWildcardLocation, true, true);
     if (rc != 0) {
@@ -1455,7 +1455,7 @@ tl::expected<void, ErrorCode> Client::MountSegment(const void* buffer,
                    << " size=" << size << ", error=" << rc;
         return tl::unexpected(ErrorCode::INVALID_PARAMS);
     }
-
+#endif
     // Build segment with logical name; attach TE endpoint for transport
     Segment segment;
     segment.id = generate_uuid();
