@@ -22,6 +22,10 @@
 #include "file_storage.h"
 #include "default_config.h"
 
+#ifdef USE_MEMFABRIC
+#include "transport/ascend_transport/memfabric_transport/memfabric_api.h"
+#endif
+
 namespace mooncake {
 
 PyClient::~PyClient() {}
@@ -185,7 +189,9 @@ tl::expected<void, ErrorCode> RealClient::setup_internal(
     std::optional<std::string> device_name =
         (rdma_devices.empty() ? std::nullopt
                               : std::make_optional(rdma_devices));
-
+#ifdef USE_MEMFABRIC
+    MemFabricSmemDl::SetSmemTypeFlag(SMEM_BM);
+#endif
     auto client_opt = mooncake::Client::Create(
         this->local_hostname, metadata_server, protocol, device_name,
         master_server_addr, transfer_engine);
@@ -194,6 +200,21 @@ tl::expected<void, ErrorCode> RealClient::setup_internal(
         return tl::unexpected(ErrorCode::INVALID_PARAMS);
     }
     client_ = *client_opt;
+
+#ifdef USE_MEMFABRIC
+    // mount
+    std::pair<void *, size_t> segment = MemFabricGetSegment();
+    auto mountRes = client_->MountSegment(segment.first, segment.second);
+    if (!mountRes.has_value()) {
+        LOG(ERROR) << "Failed to mount segment: "
+                    << toString(mountRes.error());
+        return tl::unexpected(mountRes.error());
+    }
+    LOG(INFO) << "init bm success, dram{" << std::hex << segment.first
+                << " " << segment.second
+                << "}, global segment size:" << global_segment_size;
+    return {};
+#endif
 
     // Local_buffer_size is allowed to be 0, but we only register memory when
     // local_buffer_size > 0. Invoke ibv_reg_mr() with size=0 is UB, and may

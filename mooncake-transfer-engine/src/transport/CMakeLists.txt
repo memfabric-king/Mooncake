@@ -25,7 +25,7 @@ if (USE_CXL)
   target_sources(transport PUBLIC $<TARGET_OBJECTS:cxl_transport>)
 endif()
 
-if (USE_ASCEND_DIRECT)
+if (USE_ASCEND_DIRECT OR USE_MEMFABRIC)
   add_subdirectory(ascend_transport)
 elseif(USE_ASCEND)
   add_subdirectory(ascend_transport)
