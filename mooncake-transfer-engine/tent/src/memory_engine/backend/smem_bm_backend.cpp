@@ -40,20 +40,6 @@ int32_t ParseDataOpType() {
     return 0;
 }
 
-uint16_t ParseDeviceId() {
-    const char* value = std::getenv("MC_MEMORY_ENGINE_DEVICE_ID");
-    if (!value || !*value) return 0;
-    char* end = nullptr;
-    const long parsed = std::strtol(value, &end, 10);
-    if (end == value || (end && *end != '\0') || parsed < 0 ||
-        parsed > std::numeric_limits<uint16_t>::max()) {
-        LOG(WARNING) << "Invalid MC_MEMORY_ENGINE_DEVICE_ID: " << value
-                     << ", using 0";
-        return 0;
-    }
-    return static_cast<uint16_t>(parsed);
-}
-
 Status SmemStatus(int32_t ret, const char* operation) {
     std::string message = std::string(operation) + " failed with " +
                           std::to_string(ret) + LOC_MARK;
@@ -121,8 +107,6 @@ Status SmemBmBackend::create(const MemoryEngineConfig& config) {
         return Status::InvalidArgument(
             "invalid MC_MEMORY_ENGINE_DATA_OP" LOC_MARK);
     }
-    device_id_ = ParseDeviceId();
-
     CHECK_STATUS(initializeBackendLocked());
     instance_active_ = true;
     return Status::OK();
@@ -152,7 +136,7 @@ Status SmemBmBackend::initializeBackendLocked() {
     bm_config.controlOperationTimeout = config_.join_timeout_s;
 
     ret = SmemBmUnderApi::Init(config_.store_url.c_str(), config_.world_size,
-                               device_id_, &bm_config);
+                               0xffff, &bm_config);
     if (ret != smem_bm::kOk) {
         SmemBmUnderApi::UnloadLibrary();
         library_loaded_ = false;

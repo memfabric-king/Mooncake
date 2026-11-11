@@ -117,7 +117,6 @@ class MemoryEngineTest : public ::testing::Test {
     void SetUp() override {
         setenv("MC_MEMORY_ENGINE_LIB", MOCK_SMEM_BM_LIB, 1);
         setenv("MC_MEMORY_ENGINE_DATA_OP", "device_rdma", 1);
-        setenv("MC_MEMORY_ENGINE_DEVICE_ID", "0", 1);
         mock_smem_bm_reset();
 
         engine_config_.world_size = 2;

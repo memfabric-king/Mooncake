@@ -195,7 +195,7 @@ inline int32_t memoryEngineErrorCode(const Status& status) {
 //   MC_MEMORY_ENGINE_LIB: override the libmf_smem.so path.
 //   MC_MEMORY_ENGINE_DATA_OP: sdma | host_rdma | host_tcp | device_rdma |
 //     host_urma | host_shm | device_urma | device_uboe (default device_rdma).
-//   MC_MEMORY_ENGINE_DEVICE_ID: device id passed to smem_bm_init (default 0).
+//   Device id is passed to smem_bm_init as 0xffff; smem_bm resolves it.
 //
 // Lifecycle: create() -> join() -> allocate()/batchCopy() -> free() -> leave().
 // join()/leave() may be called repeatedly; the backend re-creates its local

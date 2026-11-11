@@ -71,7 +71,6 @@ class SmemBmBackend {
     static smem_bm::SmemMemType toSmemMemType(MemoryEngineMemType type);
 
     MemoryEngineConfig config_;
-    uint16_t device_id_{0};
     int32_t data_op_type_{0};
 
     smem_bm::SmemBmHandle handle_{nullptr};
