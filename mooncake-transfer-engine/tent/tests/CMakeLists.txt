@@ -882,8 +882,8 @@ endif()
 
 if(USE_ASCEND_DIRECT)
   add_executable(tent_shared_host_mapper_test shared_host_mapper_test.cpp)
-  target_link_libraries(tent_shared_host_mapper_test
-                        PRIVATE gtest gtest_main tent_link_group)
+  target_link_libraries(tent_shared_host_mapper_test PRIVATE gtest gtest_main
+                                                             tent_link_group)
   target_include_directories(tent_shared_host_mapper_test
                              PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
   add_test(NAME tent_shared_host_mapper_test
@@ -969,3 +969,31 @@ if(USE_MLU)
     "-Wl,--wrap=cnQueryNotifier"
     "-Wl,--wrap=cnQueryQueue")
 endif()
+
+# MemoryEngine unit tests. The mock libmf_smem.so is a real shared library so
+# the dlopen-based backend is exercised end to end without Ascend hardware.
+add_library(mock_smem_bm SHARED memory_engine/mock_smem_bm.cpp)
+target_compile_features(mock_smem_bm PRIVATE cxx_std_20)
+target_include_directories(
+  mock_smem_bm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src/memory_engine/backend
+                       ${CMAKE_CURRENT_SOURCE_DIR}/memory_engine)
+
+add_executable(
+  tent_memory_engine_test
+  memory_engine_test.cpp ../src/memory_engine/memory_engine.cpp
+  ../src/memory_engine/backend/smem_bm_backend.cpp
+  ../src/memory_engine/backend/smem_bm_api.cpp)
+target_link_libraries(
+  tent_memory_engine_test PRIVATE gtest gtest_main tent_common mock_smem_bm
+                                  ${CMAKE_DL_LIBS})
+target_include_directories(
+  tent_memory_engine_test
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include
+          ${CMAKE_CURRENT_SOURCE_DIR}/memory_engine
+          ${CMAKE_CURRENT_SOURCE_DIR}/../src/memory_engine/backend)
+target_compile_definitions(
+  tent_memory_engine_test
+  PRIVATE MOCK_SMEM_BM_LIB="$<TARGET_FILE:mock_smem_bm>")
+add_dependencies(tent_memory_engine_test mock_smem_bm)
+add_test(NAME tent_memory_engine_test COMMAND tent_memory_engine_test)
+set_tests_properties(tent_memory_engine_test PROPERTIES TIMEOUT 120)
