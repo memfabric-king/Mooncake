@@ -55,8 +55,8 @@ Status MemoryEngineConfig::fromConfig(const Config& config,
     result.host_mem_max = config.get<uint64_t>("memory_engine/host_mem_max", 0);
     result.device_mem_max =
         config.get<uint64_t>("memory_engine/device_mem_max", 0);
-    result.join_timeout_ms =
-        config.get<int64_t>("memory_engine/join_timeout_ms", 120000);
+    result.join_timeout_s =
+        config.get<uint32_t>("memory_engine/join_timeout_s", 120);
     result.store_url = config.get("memory_engine/store_url", std::string());
     if (result.store_url.empty()) result.store_url = DeriveStoreUrl(config);
     *out = result;
@@ -196,7 +196,7 @@ void tent_memory_engine_config_init(tent_memory_engine_config_t* config) {
     config->local_rank = 0;
     config->host_mem_max = 0;
     config->device_mem_max = 0;
-    config->join_timeout_ms = 120000;
+    config->join_timeout_s = 120;
     config->enabled_server = 1;
     config->auto_ranking = 1;
     config->store_url[0] = '\0';
@@ -215,7 +215,7 @@ int tent_memory_engine_create(const tent_memory_engine_config_t* config,
         engine_config.local_rank = config->local_rank;
         engine_config.host_mem_max = config->host_mem_max;
         engine_config.device_mem_max = config->device_mem_max;
-        engine_config.join_timeout_ms = config->join_timeout_ms;
+        engine_config.join_timeout_s = config->join_timeout_s;
         engine_config.enabled_server = config->enabled_server != 0;
         engine_config.auto_ranking = config->auto_ranking != 0;
         engine_config.store_url.assign(

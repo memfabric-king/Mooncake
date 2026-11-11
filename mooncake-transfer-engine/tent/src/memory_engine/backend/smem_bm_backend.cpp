@@ -25,33 +25,9 @@ namespace mooncake {
 namespace tent {
 namespace {
 
-Status AlignUp(uint64_t value, uint64_t* out) {
-    if (!out) return Status::InvalidArgument("null output" LOC_MARK);
-    if (value == 0) {
-        *out = 0;
-        return Status::OK();
-    }
-    constexpr uint64_t mask = smem_bm::kLargePageSize - 1;
-    if (value > std::numeric_limits<uint64_t>::max() - mask) {
-        return Status::InvalidArgument(
-            "memory size overflows the backend alignment" LOC_MARK);
-    }
-    *out = (value + mask) & ~mask;
-    return Status::OK();
-}
-
-uint32_t TimeoutSeconds(int64_t timeout_ms) {
-    if (timeout_ms <= 0) return 1;
-    uint64_t seconds = (static_cast<uint64_t>(timeout_ms) + 999ULL) / 1000ULL;
-    if (seconds == 0) seconds = 1;
-    if (seconds > std::numeric_limits<uint32_t>::max())
-        seconds = std::numeric_limits<uint32_t>::max();
-    return static_cast<uint32_t>(seconds);
-}
-
 int32_t ParseDataOpType() {
     const char* value = std::getenv("MC_MEMORY_ENGINE_DATA_OP");
-    const std::string name = (value && *value) ? value : "device_rdma";
+    const std::string name = (value && *value) ? value : "sdma";
     if (name == "sdma") return smem_bm::kDataOpSdma;
     if (name == "host_rdma") return smem_bm::kDataOpHostRdma;
     if (name == "host_tcp") return smem_bm::kDataOpHostTcp;
@@ -110,9 +86,6 @@ int32_t SmemToMemoryEngineError(int32_t ret) {
 
 }  // namespace
 
-std::mutex SmemBmBackend::instance_mutex_;
-bool SmemBmBackend::instance_active_ = false;
-
 SmemBmBackend::~SmemBmBackend() { shutdown(); }
 
 int SmemBmBackend::typeIndex(MemoryEngineMemType type) {
@@ -134,7 +107,7 @@ Status SmemBmBackend::create(const MemoryEngineConfig& config) {
     std::lock_guard<std::mutex> lock(instance_mutex_);
     if (instance_active_) {
         return Status::InvalidArgument(
-            "another MemoryEngine is already active in this process" LOC_MARK);
+            "this SmemBmBackend is already created" LOC_MARK);
     }
     if (config.store_url.empty()) {
         return Status::InvalidArgument(
@@ -150,11 +123,8 @@ Status SmemBmBackend::create(const MemoryEngineConfig& config) {
     }
     device_id_ = ParseDeviceId();
 
-    max_[0] = config_.host_mem_max;
-    max_[1] = config_.device_mem_max;
     CHECK_STATUS(initializeBackendLocked());
     instance_active_ = true;
-    owns_instance_ = true;
     return Status::OK();
 }
 
@@ -177,10 +147,9 @@ Status SmemBmBackend::initializeBackendLocked() {
     }
     bm_config.autoRanking = config_.auto_ranking;
     bm_config.rankId = config_.auto_ranking ? 0 : config_.local_rank;
-    const uint32_t timeout_s = TimeoutSeconds(config_.join_timeout_ms);
-    bm_config.initTimeout = timeout_s;
-    bm_config.createTimeout = timeout_s;
-    bm_config.controlOperationTimeout = timeout_s;
+    bm_config.initTimeout = config_.join_timeout_s;
+    bm_config.createTimeout = config_.join_timeout_s;
+    bm_config.controlOperationTimeout = config_.join_timeout_s;
 
     ret = SmemBmUnderApi::Init(config_.store_url.c_str(), config_.world_size,
                                device_id_, &bm_config);
@@ -192,8 +161,8 @@ Status SmemBmBackend::initializeBackendLocked() {
     bm_initialized_ = true;
 
     smem_bm::SmemBmCreateOption option{};
-    option.maxDramSize = max_[0];
-    option.maxHbmSize = max_[1];
+    option.maxDramSize = config_.host_mem_max;
+    option.maxHbmSize = config_.device_mem_max;
     option.localDRAMSize = 0;
     option.localHBMSize = 0;
     option.dataOpType = static_cast<smem_bm::SmemDataOpType>(data_op_type_);
@@ -235,22 +204,13 @@ void SmemBmBackend::cleanupBackendLocked() {
     initialized_ = false;
     joined_ = false;
     local_rank_ = 0;
-    resetAllocatorLocked();
-}
-
-void SmemBmBackend::resetAllocatorLocked() {
-    for (auto& blocks : free_blocks_) blocks.clear();
-    allocations_.clear();
 }
 
 void SmemBmBackend::shutdown() {
     std::lock_guard<std::mutex> lock(instance_mutex_);
     cleanupBackendLocked();
     config_ = MemoryEngineConfig{};
-    if (owns_instance_) {
-        instance_active_ = false;
-        owns_instance_ = false;
-    }
+    instance_active_ = false;
 }
 
 Status SmemBmBackend::join() {
@@ -271,11 +231,6 @@ Status SmemBmBackend::leave() {
     if (!joined_) {
         return Status::MemoryEngineNotJoined(
             "MemoryEngine is not joined" LOC_MARK);
-    }
-    if (!allocations_.empty()) {
-        LOG(WARNING) << "MemoryEngine::leave called with "
-                     << allocations_.size()
-                     << " live allocation(s); their GVAs become invalid";
     }
     const int32_t ret = SmemBmUnderApi::Leave(handle_, 0);
     cleanupBackendLocked();
@@ -351,108 +306,26 @@ Status SmemBmBackend::allocate(uint64_t size, MemoryEngineMemType type,
         return Status::MemoryEngineNotJoined(
             "MemoryEngine must be joined before allocate" LOC_MARK);
     }
-    const int index = typeIndex(type);
-    if (index < 0) {
-        return Status::InvalidArgument("invalid memory type" LOC_MARK);
-    }
-    uint64_t aligned = 0;
-    CHECK_STATUS(AlignUp(size, &aligned));
-    if (aligned == 0) {
-        return Status::InvalidArgument(
-            "allocation size must be greater than 0" LOC_MARK);
-    }
-    if (aligned > max_[index]) {
-        return Status::MemoryEngineNoSpace(
-            "allocation exceeds the per-rank memory window" LOC_MARK);
-    }
 
-    uint64_t offset = 0;
-    auto& blocks = free_blocks_[index];
-    auto block = blocks.begin();
-    for (; block != blocks.end(); ++block) {
-        if (block->second >= aligned) break;
-    }
-    if (block != blocks.end()) {
-        offset = block->first;
-        const uint64_t block_size = block->second;
-        blocks.erase(block);
-        if (block_size > aligned) {
-            blocks.emplace(offset + aligned, block_size - aligned);
-        }
-    } else {
-        const uint64_t used =
-            SmemBmUnderApi::GetLocalMemSize(handle_, toSmemMemType(type));
-        if (used > max_[index] - aligned) {
-            return Status::MemoryEngineNoSpace(
-                "no space left in the per-rank memory window" LOC_MARK);
-        }
-        // smem_bm appends the new slice at the end of this rank's window. The
-        // call returns after the server accepts it; peers receive the update
-        // asynchronously, so an application that immediately lets another
-        // rank access the new GVA needs its own barrier.
-        const int32_t ret = SmemBmUnderApi::ExtendLocalMem(
-            handle_, toSmemMemType(type), aligned);
-        if (ret != smem_bm::kOk) {
-            return SmemStatus(ret, "smem_bm_extend_local_mem");
-        }
-        offset = used;
+    const auto mem_type = toSmemMemType(type);
+    const uint64_t offset = SmemBmUnderApi::GetLocalMemSize(handle_, mem_type);
+    const int32_t ret = SmemBmUnderApi::ExtendLocalMem(handle_, mem_type, size);
+    if (ret != smem_bm::kOk) {
+        return SmemStatus(ret, "smem_bm_extend_local_mem");
     }
 
     void* base = SmemBmUnderApi::PtrByMemType(
-        handle_, toSmemMemType(type), static_cast<uint16_t>(local_rank_));
+        handle_, mem_type, static_cast<uint16_t>(local_rank_));
     if (!base) {
         return Status::MemoryEngineBackendError(
             "failed to resolve the local GVA base" LOC_MARK);
     }
-    void* gva = static_cast<uint8_t*>(base) + offset;
-    allocations_[gva] =
-        Allocation{offset, aligned, static_cast<uint8_t>(index)};
-    *gva_out = gva;
+    *gva_out = static_cast<uint8_t*>(base) + offset;
     return Status::OK();
 }
 
 Status SmemBmBackend::free(void* gva) {
-    if (!gva) {
-        return Status::InvalidArgument("gva is null" LOC_MARK);
-    }
-    if (!joined_) {
-        return Status::MemoryEngineNotJoined(
-            "MemoryEngine must be joined before free" LOC_MARK);
-    }
-    auto it = allocations_.find(gva);
-    if (it == allocations_.end()) {
-        return Status::InvalidArgument(
-            "gva was not returned by MemoryEngine::allocate" LOC_MARK);
-    }
-    // smem_bm has no shrink or unmap entry point. Return the block to the
-    // local free list so a later allocate() can reuse the same GVA; the
-    // physical slice stays mapped until leave() destroys the BM.
-    const Allocation allocation = it->second;
-    allocations_.erase(it);
-
-    const int index = allocation.type;
-    if (index < 0 || index > 1) {
-        return Status::InternalError("corrupt allocation type" LOC_MARK);
-    }
-    auto& blocks = free_blocks_[index];
-    uint64_t offset = allocation.offset;
-    uint64_t size = allocation.size;
-
-    auto next = blocks.lower_bound(offset);
-    if (next != blocks.end() && next->first == offset + size) {
-        size += next->second;
-        blocks.erase(next);
-    }
-    auto previous = blocks.lower_bound(offset);
-    if (previous != blocks.begin()) {
-        --previous;
-        if (previous->first + previous->second == offset) {
-            offset = previous->first;
-            size += previous->second;
-            blocks.erase(previous);
-        }
-    }
-    blocks.emplace(offset, size);
+    (void)gva;
     return Status::OK();
 }
 

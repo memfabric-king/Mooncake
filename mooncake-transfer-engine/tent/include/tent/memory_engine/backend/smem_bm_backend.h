@@ -16,10 +16,8 @@
 #define TENT_MEMORY_ENGINE_SMEM_BM_BACKEND_H
 
 #include <cstdint>
-#include <map>
 #include <mutex>
 #include <string>
-#include <unordered_map>
 #include <vector>
 
 #include "smem_bm_api.h"
@@ -43,9 +41,9 @@ class SmemBmBackend {
     // Big Memory segment (but does not join the global pool). The control-plane
     // URL is taken from config.store_url. smem_bm_init and smem_bm_create2 run
     // here so the rank and GVA bases are available as soon as create()
-    // returns; join() publishes the rank to the global pool. The caller must
-    // destroy this backend before creating another one in the same process;
-    // smem_bm_init() is process-global.
+    // returns; join() publishes the rank to the global pool. smem_bm_init() is
+    // process-global, so callers must not create backends with conflicting
+    // world sizes.
     Status create(const MemoryEngineConfig& config);
 
     Status join();
@@ -66,15 +64,8 @@ class SmemBmBackend {
                      std::vector<int32_t>* results);
 
    private:
-    struct Allocation {
-        uint64_t offset{0};
-        uint64_t size{0};
-        uint8_t type{0};
-    };
-
     Status initializeBackendLocked();
     void cleanupBackendLocked();
-    void resetAllocatorLocked();
 
     static int typeIndex(MemoryEngineMemType type);
     static smem_bm::SmemMemType toSmemMemType(MemoryEngineMemType type);
@@ -83,10 +74,6 @@ class SmemBmBackend {
     uint16_t device_id_{0};
     int32_t data_op_type_{0};
 
-    uint64_t max_[2]{0, 0};
-    std::map<uint64_t, uint64_t> free_blocks_[2];
-    std::unordered_map<void*, Allocation> allocations_;
-
     smem_bm::SmemBmHandle handle_{nullptr};
     bool library_loaded_{false};
     bool bm_initialized_{false};
@@ -94,9 +81,8 @@ class SmemBmBackend {
     bool joined_{false};
     uint32_t local_rank_{0};
 
-    static std::mutex instance_mutex_;
-    static bool instance_active_;
-    bool owns_instance_{false};
+    std::mutex instance_mutex_;
+    bool instance_active_{false};
 };
 
 }  // namespace tent

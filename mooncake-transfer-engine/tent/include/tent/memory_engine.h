@@ -48,7 +48,7 @@ typedef struct tent_memory_engine_config {
     uint32_t local_rank; /* only used when auto_ranking == 0 */
     uint64_t host_mem_max;
     uint64_t device_mem_max;
-    int64_t join_timeout_ms;
+    uint32_t join_timeout_s;
     int enabled_server;
     int auto_ranking;
     char store_url[256]; /* empty: derive from metadata_* via fromConfig */
@@ -138,7 +138,7 @@ struct MemoryEngineConfig {
     uint32_t local_rank{0};  // required when auto_ranking == false
     uint64_t host_mem_max{0};
     uint64_t device_mem_max{0};
-    int64_t join_timeout_ms{120000};
+    uint32_t join_timeout_s{120};  // seconds, passed to smem_bm as-is
     bool enabled_server{true};
     bool auto_ranking{true};
     // Filled by fromConfig() from memory_engine/store_url, or derived from
@@ -224,9 +224,9 @@ class MemoryEngine {
     Status rankOfGva(const void* gva, uint32_t* rank_out) const;
 
     // Pool memory: both the returned and accepted addresses are GVAs.
-    // allocate() extends the local contribution on demand. free() returns the
-    // range to the local allocator for reuse; smem_bm cannot shrink a mapped
-    // slice, so the physical memory is reclaimed when leave() destroys the BM.
+    // allocate() passes size through to smem_bm, which expects its native
+    // allocation granularity (currently 2 MB). free() is a no-op; the slice is
+    // reclaimed when leave() destroys the BM.
     Status allocate(uint64_t size, MemoryEngineMemType type, void** gva_out);
     Status free(void* gva);
 

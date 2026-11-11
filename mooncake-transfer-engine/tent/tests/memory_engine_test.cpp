@@ -71,7 +71,7 @@ TEST(MemoryEngineConfigTest, ReadsDefaultsAndOverrides) {
     EXPECT_EQ(engine_config.local_rank, 0u);
     EXPECT_EQ(engine_config.host_mem_max, 0u);
     EXPECT_EQ(engine_config.device_mem_max, 0u);
-    EXPECT_EQ(engine_config.join_timeout_ms, 120000);
+    EXPECT_EQ(engine_config.join_timeout_s, 120u);
     EXPECT_TRUE(engine_config.enabled_server);
     EXPECT_TRUE(engine_config.auto_ranking);
     EXPECT_TRUE(engine_config.store_url.empty());
@@ -91,7 +91,7 @@ TEST(MemoryEngineConfigTest, ReadsDefaultsAndOverrides) {
     config.set("memory_engine/local_rank", 3u);
     config.set("memory_engine/host_mem_max", 1ULL << 30);
     config.set("memory_engine/device_mem_max", 2ULL << 30);
-    config.set("memory_engine/join_timeout_ms", 5000);
+    config.set("memory_engine/join_timeout_s", 5u);
     ASSERT_TRUE(MemoryEngineConfig::fromConfig(config, &engine_config).ok());
     EXPECT_FALSE(engine_config.enabled_server);
     EXPECT_EQ(engine_config.world_size, 4u);
@@ -99,14 +99,14 @@ TEST(MemoryEngineConfigTest, ReadsDefaultsAndOverrides) {
     EXPECT_EQ(engine_config.local_rank, 3u);
     EXPECT_EQ(engine_config.host_mem_max, 1ULL << 30);
     EXPECT_EQ(engine_config.device_mem_max, 2ULL << 30);
-    EXPECT_EQ(engine_config.join_timeout_ms, 5000);
+    EXPECT_EQ(engine_config.join_timeout_s, 5u);
 
     EXPECT_TRUE(
         MemoryEngineConfig::fromConfig(config, nullptr).IsInvalidArgument());
 }
 
 TEST(MemoryEngineConfigTest, JoinTimeoutIsRuntimeCandidate) {
-    EXPECT_EQ(classifyConfigPath("memory_engine/join_timeout_ms"),
+    EXPECT_EQ(classifyConfigPath("memory_engine/join_timeout_s"),
               ConfigLifecycle::kRuntimeCandidate);
     EXPECT_EQ(classifyConfigPath("memory_engine/world_size"),
               ConfigLifecycle::kBootstrapOnly);
@@ -123,7 +123,7 @@ class MemoryEngineTest : public ::testing::Test {
         engine_config_.world_size = 2;
         engine_config_.host_mem_max = kWindow;
         engine_config_.device_mem_max = kWindow;
-        engine_config_.join_timeout_ms = 30000;
+        engine_config_.join_timeout_s = 30;
         engine_config_.store_url = "etcd://127.0.0.1:2379";
     }
 
@@ -221,14 +221,20 @@ TEST_F(MemoryEngineTest, JoinAllocateFreeAndRejoin) {
     ASSERT_TRUE(Create().ok());
 
     void* gva = nullptr;
-    EXPECT_TRUE(engine_->allocate(kMiB, MemoryEngineMemType::Host, &gva)
+    EXPECT_TRUE(engine_->allocate(kAlign, MemoryEngineMemType::Host, &gva)
                     .IsMemoryEngineNotJoined());
 
     ASSERT_TRUE(engine_->join().ok());
     EXPECT_EQ(mock_smem_bm_joined(), 1);
     EXPECT_TRUE(engine_->join().IsMemoryEngineAlreadyJoined());
 
-    ASSERT_TRUE(engine_->allocate(kMiB, MemoryEngineMemType::Host, &gva).ok());
+    void* unaligned = nullptr;
+    EXPECT_TRUE(engine_->allocate(kMiB, MemoryEngineMemType::Host, &unaligned)
+                    .IsInvalidArgument());
+    EXPECT_EQ(unaligned, nullptr);
+
+    ASSERT_TRUE(
+        engine_->allocate(kAlign, MemoryEngineMemType::Host, &gva).ok());
     ASSERT_NE(gva, nullptr);
     EXPECT_EQ(reinterpret_cast<uintptr_t>(gva) % kAlign, 0u);
     EXPECT_EQ(mock_smem_bm_local_size(0), kAlign);
@@ -245,19 +251,19 @@ TEST_F(MemoryEngineTest, JoinAllocateFreeAndRejoin) {
     EXPECT_EQ(gva_rank, 0u);
 
     ASSERT_TRUE(engine_->free(gva).ok());
-    EXPECT_TRUE(engine_->free(gva).IsInvalidArgument());
+    EXPECT_TRUE(engine_->free(gva).ok());
 
-    void* reused = nullptr;
+    void* next = nullptr;
     ASSERT_TRUE(
-        engine_->allocate(kAlign, MemoryEngineMemType::Host, &reused).ok());
-    EXPECT_EQ(reused, gva);
-    EXPECT_EQ(mock_smem_bm_extend_calls(0), 2u);
+        engine_->allocate(kAlign, MemoryEngineMemType::Host, &next).ok());
+    EXPECT_NE(next, gva);
+    EXPECT_EQ(mock_smem_bm_extend_calls(0), 3u);
 
     void* too_large = reinterpret_cast<void*>(0x1);
     EXPECT_TRUE(
         engine_
             ->allocate(kWindow + kAlign, MemoryEngineMemType::Host, &too_large)
-            .IsMemoryEngineNoSpace());
+            .IsInvalidArgument());
     EXPECT_EQ(too_large, nullptr);
 
     int dummy = 0;
@@ -271,7 +277,7 @@ TEST_F(MemoryEngineTest, JoinAllocateFreeAndRejoin) {
     EXPECT_TRUE(engine_->leave().IsMemoryEngineNotJoined());
     EXPECT_TRUE(engine_->allocate(kAlign, MemoryEngineMemType::Host, &gva)
                     .IsMemoryEngineNotJoined());
-    EXPECT_TRUE(engine_->free(reused).IsMemoryEngineNotJoined());
+    EXPECT_TRUE(engine_->free(next).ok());
     std::vector<int32_t> results;
     EXPECT_TRUE(engine_->batchCopy({{&dummy, &dummy, 1}}, &results)
                     .IsMemoryEngineNotJoined());
@@ -282,39 +288,6 @@ TEST_F(MemoryEngineTest, JoinAllocateFreeAndRejoin) {
     ASSERT_TRUE(
         engine_->allocate(kAlign, MemoryEngineMemType::Host, &gva).ok());
     ASSERT_NE(gva, nullptr);
-}
-
-TEST_F(MemoryEngineTest, FreeCoalescesAdjacentBlocks) {
-    ASSERT_TRUE(Create().ok());
-    ASSERT_TRUE(engine_->join().ok());
-
-    void* a = nullptr;
-    void* b = nullptr;
-    void* c = nullptr;
-    ASSERT_TRUE(engine_->allocate(kAlign, MemoryEngineMemType::Host, &a).ok());
-    ASSERT_TRUE(engine_->allocate(kAlign, MemoryEngineMemType::Host, &b).ok());
-    ASSERT_TRUE(engine_->allocate(kAlign, MemoryEngineMemType::Host, &c).ok());
-    EXPECT_EQ(ByteDiff(b, a), kAlign);
-    EXPECT_EQ(ByteDiff(c, b), kAlign);
-
-    ASSERT_TRUE(engine_->free(a).ok());
-    ASSERT_TRUE(engine_->free(b).ok());
-    const uint64_t extend_calls = mock_smem_bm_extend_calls(0);
-
-    void* merged = nullptr;
-    ASSERT_TRUE(
-        engine_->allocate(2 * kAlign, MemoryEngineMemType::Host, &merged).ok());
-    EXPECT_EQ(merged, a);
-    EXPECT_EQ(mock_smem_bm_extend_calls(0), extend_calls);
-
-    ASSERT_TRUE(engine_->free(c).ok());
-    ASSERT_TRUE(engine_->free(merged).ok());
-    void* fully_merged = nullptr;
-    ASSERT_TRUE(
-        engine_->allocate(3 * kAlign, MemoryEngineMemType::Host, &fully_merged)
-            .ok());
-    EXPECT_EQ(fully_merged, a);
-    EXPECT_EQ(mock_smem_bm_extend_calls(0), extend_calls);
 }
 
 TEST_F(MemoryEngineTest, HostAndDeviceWindowsAreIndependent) {
@@ -415,23 +388,6 @@ TEST_F(MemoryEngineTest, BatchCopyCopiesBothDirectionsAndAttributesFailures) {
     EXPECT_TRUE(engine_->batchCopy(entries, nullptr).IsInvalidArgument());
 }
 
-TEST_F(MemoryEngineTest, BackendIsSingletonPerProcess) {
-    ASSERT_TRUE(Create().ok());
-    std::unique_ptr<MemoryEngine> second;
-    EXPECT_TRUE(
-        MemoryEngine::create(engine_config_, &second).IsInvalidArgument());
-    EXPECT_EQ(second, nullptr);
-    // The failed second create must not release the first engine's backend.
-    ASSERT_TRUE(engine_->join().ok());
-    void* gva = nullptr;
-    ASSERT_TRUE(
-        engine_->allocate(kAlign, MemoryEngineMemType::Host, &gva).ok());
-
-    engine_.reset();
-    ASSERT_TRUE(MemoryEngine::create(engine_config_, &second).ok());
-    engine_ = std::move(second);
-}
-
 TEST_F(MemoryEngineTest, MissingLibraryIsReportedByCreate) {
     EnvGuard guard("MC_MEMORY_ENGINE_LIB",
                    "/nonexistent/libmf_smem_missing.so");
@@ -445,7 +401,7 @@ TEST_F(MemoryEngineTest, CAbiSmoke) {
     config.world_size = 1;
     config.host_mem_max = kWindow;
     config.device_mem_max = 0;
-    config.join_timeout_ms = 30000;
+    config.join_timeout_s = 30;
     std::strncpy(config.store_url, "etcd://127.0.0.1:2379",
                  sizeof(config.store_url) - 1);
 
@@ -469,7 +425,7 @@ TEST_F(MemoryEngineTest, CAbiSmoke) {
     ASSERT_NE(base, nullptr);
 
     void* gva = nullptr;
-    EXPECT_EQ(tent_memory_engine_allocate(engine, kMiB,
+    EXPECT_EQ(tent_memory_engine_allocate(engine, kAlign,
                                           TENT_MEMORY_ENGINE_MEM_HOST, &gva),
               MEMORY_ENGINE_SUCCESS);
     ASSERT_NE(gva, nullptr);
@@ -489,15 +445,15 @@ TEST_F(MemoryEngineTest, CAbiSmoke) {
     void* registered = nullptr;
     EXPECT_EQ(tent_memory_engine_register_memory(engine, base, 16, &registered),
               MEMORY_ENGINE_E_UNSUPPORTED);
-    EXPECT_EQ(tent_memory_engine_allocate(engine, kMiB,
+    EXPECT_EQ(tent_memory_engine_allocate(engine, kAlign,
                                           TENT_MEMORY_ENGINE_MEM_DEVICE, &gva),
-              MEMORY_ENGINE_E_NO_SPACE);
+              MEMORY_ENGINE_E_INVALID_ARG);
 
     EXPECT_EQ(tent_memory_engine_leave(engine), MEMORY_ENGINE_SUCCESS);
-    EXPECT_EQ(tent_memory_engine_allocate(engine, kMiB,
+    EXPECT_EQ(tent_memory_engine_allocate(engine, kAlign,
                                           TENT_MEMORY_ENGINE_MEM_HOST, &gva),
               MEMORY_ENGINE_E_NOT_JOINED);
-    EXPECT_EQ(tent_memory_engine_allocate(engine, kMiB,
+    EXPECT_EQ(tent_memory_engine_allocate(engine, kAlign,
                                           TENT_MEMORY_ENGINE_MEM_DEVICE, &gva),
               MEMORY_ENGINE_E_NOT_JOINED);
 
