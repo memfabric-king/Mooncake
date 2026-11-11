@@ -31,7 +31,6 @@ class SmemBmUnderApi {
    public:
     static bool LoadLibrary();
     static void UnloadLibrary();
-    static bool IsLoaded();
 
     static int32_t ConfigInit(smem_bm::SmemBmConfig* config);
     static int32_t Init(const char* store_url, uint32_t world_size,
@@ -39,6 +38,7 @@ class SmemBmUnderApi {
                         const smem_bm::SmemBmConfig* config);
     static void Uninit(uint32_t flags);
     static uint32_t GetRankId();
+    static uint32_t GetRankIdByGva(smem_bm::SmemBmHandle handle, void* gva);
     static smem_bm::SmemBmHandle Create2(
         uint32_t id, const smem_bm::SmemBmCreateOption* option);
     static void Destroy(smem_bm::SmemBmHandle handle);
@@ -60,6 +60,7 @@ class SmemBmUnderApi {
                                const smem_bm::SmemBmConfig*);
     using UninitFn = void (*)(uint32_t);
     using GetRankIdFn = uint32_t (*)();
+    using GetRankIdByGvaFn = uint32_t (*)(smem_bm::SmemBmHandle, void*);
     using Create2Fn =
         smem_bm::SmemBmHandle (*)(uint32_t, const smem_bm::SmemBmCreateOption*);
     using DestroyFn = void (*)(smem_bm::SmemBmHandle);
@@ -87,6 +88,7 @@ class SmemBmUnderApi {
     static InitFn init_;
     static UninitFn uninit_;
     static GetRankIdFn get_rank_id_;
+    static GetRankIdByGvaFn get_rank_id_by_gva_;
     static Create2Fn create2_;
     static DestroyFn destroy_;
     static JoinFn join_;

@@ -139,11 +139,6 @@ Status SmemBmBackend::prepareLayoutLocked() {
         return Status::InvalidArgument(
             "memory_engine/world_size must be greater than 0" LOC_MARK);
     }
-    if (!config_.auto_ranking && config_.local_rank >= config_.world_size) {
-        return Status::InvalidArgument(
-            "memory_engine/local_rank must be smaller than "
-            "world_size" LOC_MARK);
-    }
     if (config_.join_timeout_ms <= 0) {
         return Status::InvalidArgument(
             "memory_engine/join_timeout_ms must be greater than 0" LOC_MARK);
@@ -158,27 +153,8 @@ Status SmemBmBackend::prepareLayoutLocked() {
             "memory_engine/host_mem_max and device_mem_max cannot both be "
             "zero" LOC_MARK);
     }
-    if (host_max > smem_bm::kMaxLocalDramSize) {
-        return Status::InvalidArgument(
-            "memory_engine/host_mem_max exceeds the backend limit" LOC_MARK);
-    }
-    if (device_max > smem_bm::kMaxLocalHbmSize) {
-        return Status::InvalidArgument(
-            "memory_engine/device_mem_max exceeds the backend limit" LOC_MARK);
-    }
-
-    const uint64_t world_size = config_.world_size;
-    if (host_max > std::numeric_limits<uint64_t>::max() / world_size ||
-        device_max > std::numeric_limits<uint64_t>::max() / world_size) {
-        return Status::InvalidArgument(
-            "GVA layout size overflows 64 bits" LOC_MARK);
-    }
-
-    world_size_ = config_.world_size;
     max_[0] = host_max;
     max_[1] = device_max;
-    total_[0] = host_max * world_size;
-    total_[1] = device_max * world_size;
     return Status::OK();
 }
 
@@ -235,8 +211,8 @@ Status SmemBmBackend::initializeBackendLocked() {
     bm_config.createTimeout = timeout_s;
     bm_config.controlOperationTimeout = timeout_s;
 
-    ret = SmemBmUnderApi::Init(store_url_.c_str(), world_size_, device_id_,
-                               &bm_config);
+    ret = SmemBmUnderApi::Init(store_url_.c_str(), config_.world_size,
+                               device_id_, &bm_config);
     if (ret != smem_bm::kOk) {
         SmemBmUnderApi::UnloadLibrary();
         library_loaded_ = false;
@@ -262,38 +238,12 @@ Status SmemBmBackend::initializeBackendLocked() {
     }
 
     const uint32_t rank = SmemBmUnderApi::GetRankId();
-    if (rank == std::numeric_limits<uint32_t>::max() || rank >= world_size_) {
+    if (rank == std::numeric_limits<uint32_t>::max()) {
         cleanupBackendLocked();
         return Status::MemoryEngineBackendError(
             "smem_bm_get_rank_id returned an invalid rank" LOC_MARK);
     }
-    if (!config_.auto_ranking && rank != config_.local_rank) {
-        cleanupBackendLocked();
-        return Status::InvalidArgument(
-            "smem_bm assigned a rank different from "
-            "memory_engine/local_rank" LOC_MARK);
-    }
     local_rank_ = rank;
-
-    if (max_[0] > 0) {
-        base_[0] =
-            SmemBmUnderApi::PtrByMemType(handle_, smem_bm::kGlobalHost, 0);
-        if (!base_[0]) {
-            cleanupBackendLocked();
-            return Status::MemoryEngineBackendError(
-                "failed to resolve the host GVA base" LOC_MARK);
-        }
-    }
-    if (max_[1] > 0) {
-        base_[1] =
-            SmemBmUnderApi::PtrByMemType(handle_, smem_bm::kGlobalDevice, 0);
-        if (!base_[1]) {
-            cleanupBackendLocked();
-            return Status::MemoryEngineBackendError(
-                "failed to resolve the device GVA base" LOC_MARK);
-        }
-    }
-
     initialized_ = true;
     return Status::OK();
 }
@@ -314,24 +264,17 @@ void SmemBmBackend::cleanupBackendLocked() {
     initialized_ = false;
     joined_ = false;
     local_rank_ = 0;
-    base_[0] = nullptr;
-    base_[1] = nullptr;
     resetAllocatorLocked();
 }
 
 void SmemBmBackend::resetAllocatorLocked() {
     for (auto& blocks : free_blocks_) blocks.clear();
     allocations_.clear();
-    extended_[0] = 0;
-    extended_[1] = 0;
 }
 
 void SmemBmBackend::resetLayoutLocked() {
     max_[0] = 0;
     max_[1] = 0;
-    total_[0] = 0;
-    total_[1] = 0;
-    world_size_ = 0;
     local_rank_ = 0;
 }
 
@@ -400,19 +343,20 @@ Status SmemBmBackend::gvaBase(MemoryEngineMemType type, uint32_t rank,
         return Status::MemoryEngineNotJoined(
             "MemoryEngine is not initialized" LOC_MARK);
     }
-    const int index = typeIndex(type);
-    if (index < 0) {
+    if (typeIndex(type) < 0) {
         return Status::InvalidArgument("invalid memory type" LOC_MARK);
     }
-    if (rank >= world_size_) {
+    if (rank > std::numeric_limits<uint16_t>::max()) {
         return Status::InvalidArgument("rank is out of range" LOC_MARK);
     }
-    if (max_[index] == 0 || base_[index] == nullptr) {
+    void* base = SmemBmUnderApi::PtrByMemType(handle_, toSmemMemType(type),
+                                              static_cast<uint16_t>(rank));
+    if (!base) {
         return Status::InvalidArgument(
-            "the requested memory type is not configured" LOC_MARK);
+            "rank is out of range or the memory type is not "
+            "configured" LOC_MARK);
     }
-    *gva_out = static_cast<uint8_t*>(base_[index]) +
-               static_cast<uint64_t>(rank) * max_[index];
+    *gva_out = base;
     return Status::OK();
 }
 
@@ -425,19 +369,14 @@ Status SmemBmBackend::rankOfGva(const void* gva, uint32_t* rank_out) const {
         return Status::MemoryEngineNotJoined(
             "MemoryEngine is not initialized" LOC_MARK);
     }
-    const uint64_t address = reinterpret_cast<uint64_t>(gva);
-    for (int index = 0; index < 2; ++index) {
-        if (max_[index] == 0 || base_[index] == nullptr) continue;
-        const uint64_t start = reinterpret_cast<uint64_t>(base_[index]);
-        if (address < start) continue;
-        const uint64_t delta = address - start;
-        if (delta < total_[index]) {
-            *rank_out = static_cast<uint32_t>(delta / max_[index]);
-            return Status::OK();
-        }
+    const uint32_t rank =
+        SmemBmUnderApi::GetRankIdByGva(handle_, const_cast<void*>(gva));
+    if (rank == std::numeric_limits<uint32_t>::max()) {
+        return Status::InvalidArgument(
+            "gva does not belong to this MemoryEngine pool" LOC_MARK);
     }
-    return Status::InvalidArgument(
-        "gva does not belong to this MemoryEngine pool" LOC_MARK);
+    *rank_out = rank;
+    return Status::OK();
 }
 
 Status SmemBmBackend::allocate(uint64_t size, MemoryEngineMemType type,
@@ -460,10 +399,6 @@ Status SmemBmBackend::allocate(uint64_t size, MemoryEngineMemType type,
         return Status::InvalidArgument(
             "allocation size must be greater than 0" LOC_MARK);
     }
-    if (max_[index] == 0 || base_[index] == nullptr) {
-        return Status::MemoryEngineNoSpace(
-            "the requested memory type is not configured" LOC_MARK);
-    }
     if (aligned > max_[index]) {
         return Status::MemoryEngineNoSpace(
             "allocation exceeds the per-rank memory window" LOC_MARK);
@@ -483,7 +418,9 @@ Status SmemBmBackend::allocate(uint64_t size, MemoryEngineMemType type,
             blocks.emplace(offset + aligned, block_size - aligned);
         }
     } else {
-        if (extended_[index] > max_[index] - aligned) {
+        const uint64_t used =
+            SmemBmUnderApi::GetLocalMemSize(handle_, toSmemMemType(type));
+        if (used > max_[index] - aligned) {
             return Status::MemoryEngineNoSpace(
                 "no space left in the per-rank memory window" LOC_MARK);
         }
@@ -496,11 +433,16 @@ Status SmemBmBackend::allocate(uint64_t size, MemoryEngineMemType type,
         if (ret != smem_bm::kOk) {
             return SmemStatus(ret, "smem_bm_extend_local_mem");
         }
-        offset = extended_[index];
-        extended_[index] += aligned;
+        offset = used;
     }
 
-    void* gva = static_cast<uint8_t*>(base_[index]) + offset;
+    void* base = SmemBmUnderApi::PtrByMemType(
+        handle_, toSmemMemType(type), static_cast<uint16_t>(local_rank_));
+    if (!base) {
+        return Status::MemoryEngineBackendError(
+            "failed to resolve the local GVA base" LOC_MARK);
+    }
+    void* gva = static_cast<uint8_t*>(base) + offset;
     allocations_[gva] =
         Allocation{offset, aligned, static_cast<uint8_t>(index)};
     *gva_out = gva;

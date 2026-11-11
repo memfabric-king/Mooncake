@@ -29,8 +29,6 @@ namespace smem_bm {
 
 constexpr uint32_t kTlsPathSize = 256;
 constexpr uint64_t kLargePageSize = 2ULL * 1024 * 1024;
-constexpr uint64_t kMaxLocalDramSize = 2ULL << 40;  // 2 TiB
-constexpr uint64_t kMaxLocalHbmSize = 64ULL << 30;  // 64 GiB
 
 // SMErrorCode values.
 constexpr int32_t kOk = 0;
@@ -38,8 +36,6 @@ constexpr int32_t kError = -1;
 constexpr int32_t kInvalidParam = -2000;
 constexpr int32_t kTimeout = -2004;
 constexpr int32_t kNotInitialized = -2008;
-constexpr int32_t kPartialFailed = -2012;
-constexpr int32_t kNeedRetry = -2015;
 
 enum SmemMemType : int32_t {
     kLocalDevice = 0,

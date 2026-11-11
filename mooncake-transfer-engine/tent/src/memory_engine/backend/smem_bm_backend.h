@@ -87,9 +87,6 @@ class SmemBmBackend {
     int32_t data_op_type_{0};
 
     uint64_t max_[2]{0, 0};
-    uint64_t total_[2]{0, 0};
-    void* base_[2]{nullptr, nullptr};
-    uint64_t extended_[2]{0, 0};
     std::map<uint64_t, uint64_t> free_blocks_[2];
     std::unordered_map<void*, Allocation> allocations_;
 
@@ -99,7 +96,6 @@ class SmemBmBackend {
     bool initialized_{false};
     bool joined_{false};
     uint32_t local_rank_{0};
-    uint32_t world_size_{0};
 
     static std::mutex instance_mutex_;
     static bool instance_active_;

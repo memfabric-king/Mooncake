@@ -40,6 +40,7 @@ SmemBmUnderApi::ConfigInitFn SmemBmUnderApi::config_init_ = nullptr;
 SmemBmUnderApi::InitFn SmemBmUnderApi::init_ = nullptr;
 SmemBmUnderApi::UninitFn SmemBmUnderApi::uninit_ = nullptr;
 SmemBmUnderApi::GetRankIdFn SmemBmUnderApi::get_rank_id_ = nullptr;
+SmemBmUnderApi::GetRankIdByGvaFn SmemBmUnderApi::get_rank_id_by_gva_ = nullptr;
 SmemBmUnderApi::Create2Fn SmemBmUnderApi::create2_ = nullptr;
 SmemBmUnderApi::DestroyFn SmemBmUnderApi::destroy_ = nullptr;
 SmemBmUnderApi::JoinFn SmemBmUnderApi::join_ = nullptr;
@@ -81,6 +82,7 @@ bool SmemBmUnderApi::LoadLibraryLocked() {
     TENT_SMEM_BM_LOAD_SYM(init_, "smem_bm_init");
     TENT_SMEM_BM_LOAD_SYM(uninit_, "smem_bm_uninit");
     TENT_SMEM_BM_LOAD_SYM(get_rank_id_, "smem_bm_get_rank_id");
+    TENT_SMEM_BM_LOAD_SYM(get_rank_id_by_gva_, "smem_bm_get_rank_id_by_gva");
     TENT_SMEM_BM_LOAD_SYM(create2_, "smem_bm_create2");
     TENT_SMEM_BM_LOAD_SYM(destroy_, "smem_bm_destroy");
     TENT_SMEM_BM_LOAD_SYM(join_, "smem_bm_join");
@@ -113,16 +115,12 @@ void SmemBmUnderApi::UnloadLibrary() {
     loaded_ = false;
 }
 
-bool SmemBmUnderApi::IsLoaded() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    return loaded_;
-}
-
 void SmemBmUnderApi::ResetSymbols() {
     config_init_ = nullptr;
     init_ = nullptr;
     uninit_ = nullptr;
     get_rank_id_ = nullptr;
+    get_rank_id_by_gva_ = nullptr;
     create2_ = nullptr;
     destroy_ = nullptr;
     join_ = nullptr;
@@ -150,6 +148,11 @@ void SmemBmUnderApi::Uninit(uint32_t flags) {
 
 uint32_t SmemBmUnderApi::GetRankId() {
     return get_rank_id_ ? get_rank_id_() : UINT32_MAX;
+}
+
+uint32_t SmemBmUnderApi::GetRankIdByGva(smem_bm::SmemBmHandle handle,
+                                        void* gva) {
+    return get_rank_id_by_gva_ ? get_rank_id_by_gva_(handle, gva) : UINT32_MAX;
 }
 
 smem_bm::SmemBmHandle SmemBmUnderApi::Create2(
