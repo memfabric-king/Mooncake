@@ -49,8 +49,9 @@ typedef struct tent_memory_engine_config {
     uint64_t host_mem_max;
     uint64_t device_mem_max;
     int64_t join_timeout_ms;
-    int enabled;
+    int enabled_server;
     int auto_ranking;
+    char store_url[256]; /* empty: derive from metadata_* via fromConfig */
 } tent_memory_engine_config_t;
 
 /* Mirrors tent::MemoryEngineCopyEntry. Either side may be a local VA or a
@@ -68,9 +69,9 @@ typedef void* tent_memory_engine_t;
 void tent_memory_engine_config_init(tent_memory_engine_config_t* config);
 
 /* On success stores the new engine in *engine_out. On failure *engine_out is
- * set to NULL and a MEMORY_ENGINE_E_* value is returned. The engine bootstraps
- * its TENT Config from MC_TENT_CONF/environment variables; metadata_type and
- * metadata_servers select the backend control plane. */
+ * set to NULL and a MEMORY_ENGINE_E_* value is returned. When store_url is
+ * empty, the engine derives it from the TENT metadata config
+ * (MC_TENT_CONF/environment, metadata_type/metadata_servers). */
 int tent_memory_engine_create(const tent_memory_engine_config_t* config,
                               tent_memory_engine_t* engine_out);
 
@@ -117,6 +118,7 @@ int tent_memory_engine_unregister_memory(tent_memory_engine_t engine,
 #include <cstdint>
 #include <memory>
 #include <shared_mutex>
+#include <string>
 #include <vector>
 
 #include "tent/common/status.h"
@@ -137,8 +139,11 @@ struct MemoryEngineConfig {
     uint64_t host_mem_max{0};
     uint64_t device_mem_max{0};
     int64_t join_timeout_ms{120000};
-    bool enabled{true};
+    bool enabled_server{true};
     bool auto_ranking{true};
+    // Filled by fromConfig() from memory_engine/store_url, or derived from
+    // metadata_type/metadata_servers when that key is absent.
+    std::string store_url;
 
     static Status fromConfig(const Config& config, MemoryEngineConfig* out);
 };
@@ -197,15 +202,10 @@ inline int32_t memoryEngineErrorCode(const Status& status) {
 // segment on the next join after leave.
 class MemoryEngine {
    public:
-    // Bootstraps the TENT Config from MC_TENT_CONF/environment variables and
-    // reads metadata_type/metadata_servers from it.
+    // config.store_url must be set, normally through
+    // MemoryEngineConfig::fromConfig() (memory_engine/store_url or the TENT
+    // metadata settings). create() does not read the environment directly.
     static Status create(const MemoryEngineConfig& config,
-                         std::unique_ptr<MemoryEngine>* out);
-
-    // Uses the provided TENT Config as-is. Useful when the caller already
-    // owns a Config object shared with a TransferEngine.
-    static Status create(std::shared_ptr<Config> tent_config,
-                         const MemoryEngineConfig& config,
                          std::unique_ptr<MemoryEngine>* out);
 
     ~MemoryEngine();

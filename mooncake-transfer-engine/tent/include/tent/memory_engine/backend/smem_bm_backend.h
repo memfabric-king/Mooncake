@@ -40,13 +40,13 @@ class SmemBmBackend {
     SmemBmBackend& operator=(const SmemBmBackend&) = delete;
 
     // Loads libmf_smem.so, initializes the config store, and creates the local
-    // Big Memory segment (but does not join the global pool). smem_bm_init and
-    // smem_bm_create2 run here so the rank and GVA bases are available as soon
-    // as create() returns; join() publishes the rank to the global pool. The
-    // caller must destroy this backend before creating another one in the same
-    // process; smem_bm_init() is process-global.
-    Status create(const std::string& store_url,
-                  const MemoryEngineConfig& config);
+    // Big Memory segment (but does not join the global pool). The control-plane
+    // URL is taken from config.store_url. smem_bm_init and smem_bm_create2 run
+    // here so the rank and GVA bases are available as soon as create()
+    // returns; join() publishes the rank to the global pool. The caller must
+    // destroy this backend before creating another one in the same process;
+    // smem_bm_init() is process-global.
+    Status create(const MemoryEngineConfig& config);
 
     Status join();
     Status leave();
@@ -72,17 +72,14 @@ class SmemBmBackend {
         uint8_t type{0};
     };
 
-    Status prepareLayoutLocked();
     Status initializeBackendLocked();
     void cleanupBackendLocked();
     void resetAllocatorLocked();
-    void resetLayoutLocked();
 
     static int typeIndex(MemoryEngineMemType type);
     static smem_bm::SmemMemType toSmemMemType(MemoryEngineMemType type);
 
     MemoryEngineConfig config_;
-    std::string store_url_;
     uint16_t device_id_{0};
     int32_t data_op_type_{0};
 

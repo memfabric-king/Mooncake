@@ -72,10 +72,20 @@ TEST(MemoryEngineConfigTest, ReadsDefaultsAndOverrides) {
     EXPECT_EQ(engine_config.host_mem_max, 0u);
     EXPECT_EQ(engine_config.device_mem_max, 0u);
     EXPECT_EQ(engine_config.join_timeout_ms, 120000);
-    EXPECT_TRUE(engine_config.enabled);
+    EXPECT_TRUE(engine_config.enabled_server);
     EXPECT_TRUE(engine_config.auto_ranking);
+    EXPECT_TRUE(engine_config.store_url.empty());
 
-    config.set("memory_engine/enabled", false);
+    config.set("metadata_type", "etcd");
+    config.set("metadata_servers", "127.0.0.1:2379");
+    ASSERT_TRUE(MemoryEngineConfig::fromConfig(config, &engine_config).ok());
+    EXPECT_EQ(engine_config.store_url, "etcd://127.0.0.1:2379");
+
+    config.set("memory_engine/store_url", "tcp://127.0.0.1:9999");
+    ASSERT_TRUE(MemoryEngineConfig::fromConfig(config, &engine_config).ok());
+    EXPECT_EQ(engine_config.store_url, "tcp://127.0.0.1:9999");
+
+    config.set("memory_engine/enabled_server", false);
     config.set("memory_engine/world_size", 4u);
     config.set("memory_engine/auto_ranking", false);
     config.set("memory_engine/local_rank", 3u);
@@ -83,7 +93,7 @@ TEST(MemoryEngineConfigTest, ReadsDefaultsAndOverrides) {
     config.set("memory_engine/device_mem_max", 2ULL << 30);
     config.set("memory_engine/join_timeout_ms", 5000);
     ASSERT_TRUE(MemoryEngineConfig::fromConfig(config, &engine_config).ok());
-    EXPECT_FALSE(engine_config.enabled);
+    EXPECT_FALSE(engine_config.enabled_server);
     EXPECT_EQ(engine_config.world_size, 4u);
     EXPECT_FALSE(engine_config.auto_ranking);
     EXPECT_EQ(engine_config.local_rank, 3u);
@@ -110,14 +120,11 @@ class MemoryEngineTest : public ::testing::Test {
         setenv("MC_MEMORY_ENGINE_DEVICE_ID", "0", 1);
         mock_smem_bm_reset();
 
-        config_ = std::make_shared<Config>();
-        config_->set("metadata_type", "etcd");
-        config_->set("metadata_servers", "127.0.0.1:2379");
-
         engine_config_.world_size = 2;
         engine_config_.host_mem_max = kWindow;
         engine_config_.device_mem_max = kWindow;
         engine_config_.join_timeout_ms = 30000;
+        engine_config_.store_url = "etcd://127.0.0.1:2379";
     }
 
     void TearDown() override {
@@ -125,46 +132,43 @@ class MemoryEngineTest : public ::testing::Test {
         mock_smem_bm_reset();
     }
 
-    Status Create() {
-        return MemoryEngine::create(config_, engine_config_, &engine_);
-    }
+    Status Create() { return MemoryEngine::create(engine_config_, &engine_); }
 
     std::unique_ptr<MemoryEngine> engine_;
-    std::shared_ptr<Config> config_;
     MemoryEngineConfig engine_config_;
 };
 
 TEST_F(MemoryEngineTest, CreateRejectsInvalidConfig) {
     auto invalid = engine_config_;
     invalid.world_size = 0;
-    EXPECT_TRUE(
-        MemoryEngine::create(config_, invalid, &engine_).IsInvalidArgument());
+    EXPECT_TRUE(MemoryEngine::create(invalid, &engine_).IsInvalidArgument());
     EXPECT_EQ(engine_, nullptr);
 
     invalid = engine_config_;
     invalid.host_mem_max = 0;
     invalid.device_mem_max = 0;
+    // "both zero" is now rejected by smem_bm_create2, so it surfaces as a
+    // backend error instead of a local invalid-argument.
     EXPECT_TRUE(
-        MemoryEngine::create(config_, invalid, &engine_).IsInvalidArgument());
+        MemoryEngine::create(invalid, &engine_).IsMemoryEngineBackendError());
 
     invalid = engine_config_;
     invalid.auto_ranking = false;
     invalid.local_rank = invalid.world_size;
-    EXPECT_TRUE(
-        MemoryEngine::create(config_, invalid, &engine_).IsInvalidArgument());
+    EXPECT_TRUE(MemoryEngine::create(invalid, &engine_).IsInvalidArgument());
 
     invalid = engine_config_;
-    invalid.enabled = false;
-    EXPECT_TRUE(MemoryEngine::create(config_, invalid, &engine_)
-                    .IsMemoryEngineDisabled());
+    invalid.enabled_server = false;
+    EXPECT_TRUE(
+        MemoryEngine::create(invalid, &engine_).IsMemoryEngineDisabled());
 
-    auto no_metadata = std::make_shared<Config>();
-    no_metadata->set("metadata_type", "etcd");
-    EXPECT_TRUE(MemoryEngine::create(no_metadata, engine_config_, &engine_)
-                    .IsInvalidArgument());
+    auto no_store_url = engine_config_;
+    no_store_url.store_url.clear();
+    EXPECT_TRUE(
+        MemoryEngine::create(no_store_url, &engine_).IsInvalidArgument());
 
-    EXPECT_TRUE(MemoryEngine::create(config_, engine_config_, nullptr)
-                    .IsInvalidArgument());
+    EXPECT_TRUE(
+        MemoryEngine::create(engine_config_, nullptr).IsInvalidArgument());
 
     // None of the rejected creates may leave the process-wide backend active.
     ASSERT_TRUE(Create().ok());
@@ -414,8 +418,8 @@ TEST_F(MemoryEngineTest, BatchCopyCopiesBothDirectionsAndAttributesFailures) {
 TEST_F(MemoryEngineTest, BackendIsSingletonPerProcess) {
     ASSERT_TRUE(Create().ok());
     std::unique_ptr<MemoryEngine> second;
-    EXPECT_TRUE(MemoryEngine::create(config_, engine_config_, &second)
-                    .IsInvalidArgument());
+    EXPECT_TRUE(
+        MemoryEngine::create(engine_config_, &second).IsInvalidArgument());
     EXPECT_EQ(second, nullptr);
     // The failed second create must not release the first engine's backend.
     ASSERT_TRUE(engine_->join().ok());
@@ -424,7 +428,7 @@ TEST_F(MemoryEngineTest, BackendIsSingletonPerProcess) {
         engine_->allocate(kAlign, MemoryEngineMemType::Host, &gva).ok());
 
     engine_.reset();
-    ASSERT_TRUE(MemoryEngine::create(config_, engine_config_, &second).ok());
+    ASSERT_TRUE(MemoryEngine::create(engine_config_, &second).ok());
     engine_ = std::move(second);
 }
 
@@ -436,16 +440,14 @@ TEST_F(MemoryEngineTest, MissingLibraryIsReportedByCreate) {
 }
 
 TEST_F(MemoryEngineTest, CAbiSmoke) {
-    EnvGuard conf_guard(
-        "MC_TENT_CONF",
-        R"({"metadata_type":"etcd","metadata_servers":"127.0.0.1:2379"})");
-
     tent_memory_engine_config_t config;
     tent_memory_engine_config_init(&config);
     config.world_size = 1;
     config.host_mem_max = kWindow;
     config.device_mem_max = 0;
     config.join_timeout_ms = 30000;
+    std::strncpy(config.store_url, "etcd://127.0.0.1:2379",
+                 sizeof(config.store_url) - 1);
 
     tent_memory_engine_t engine = nullptr;
     ASSERT_EQ(tent_memory_engine_create(&config, &engine),

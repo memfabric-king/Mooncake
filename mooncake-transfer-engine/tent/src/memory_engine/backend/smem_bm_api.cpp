@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "smem_bm_api.h"
+#include "tent/memory_engine/backend/smem_bm_api.h"
 
 #include <dlfcn.h>
 

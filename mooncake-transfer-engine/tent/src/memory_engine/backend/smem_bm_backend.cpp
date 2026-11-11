@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "smem_bm_backend.h"
+#include "tent/memory_engine/backend/smem_bm_backend.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -130,49 +130,19 @@ smem_bm::SmemMemType SmemBmBackend::toSmemMemType(MemoryEngineMemType type) {
                                                : smem_bm::kGlobalHost;
 }
 
-Status SmemBmBackend::prepareLayoutLocked() {
-    if (!config_.enabled) {
-        return Status::MemoryEngineDisabled(
-            "memory_engine/enabled is false" LOC_MARK);
-    }
-    if (config_.world_size == 0) {
-        return Status::InvalidArgument(
-            "memory_engine/world_size must be greater than 0" LOC_MARK);
-    }
-    if (config_.join_timeout_ms <= 0) {
-        return Status::InvalidArgument(
-            "memory_engine/join_timeout_ms must be greater than 0" LOC_MARK);
-    }
-
-    uint64_t host_max = 0;
-    uint64_t device_max = 0;
-    CHECK_STATUS(AlignUp(config_.host_mem_max, &host_max));
-    CHECK_STATUS(AlignUp(config_.device_mem_max, &device_max));
-    if (host_max == 0 && device_max == 0) {
-        return Status::InvalidArgument(
-            "memory_engine/host_mem_max and device_mem_max cannot both be "
-            "zero" LOC_MARK);
-    }
-    max_[0] = host_max;
-    max_[1] = device_max;
-    return Status::OK();
-}
-
-Status SmemBmBackend::create(const std::string& store_url,
-                             const MemoryEngineConfig& config) {
+Status SmemBmBackend::create(const MemoryEngineConfig& config) {
     std::lock_guard<std::mutex> lock(instance_mutex_);
     if (instance_active_) {
         return Status::InvalidArgument(
             "another MemoryEngine is already active in this process" LOC_MARK);
     }
-    if (store_url.empty()) {
+    if (config.store_url.empty()) {
         return Status::InvalidArgument(
-            "metadata_servers is required for the MemoryEngine control "
-            "plane" LOC_MARK);
+            "memory_engine/store_url is required for the MemoryEngine "
+            "control plane" LOC_MARK);
     }
 
     config_ = config;
-    store_url_ = store_url;
     data_op_type_ = ParseDataOpType();
     if (data_op_type_ == 0) {
         return Status::InvalidArgument(
@@ -180,7 +150,8 @@ Status SmemBmBackend::create(const std::string& store_url,
     }
     device_id_ = ParseDeviceId();
 
-    CHECK_STATUS(prepareLayoutLocked());
+    max_[0] = config_.host_mem_max;
+    max_[1] = config_.device_mem_max;
     CHECK_STATUS(initializeBackendLocked());
     instance_active_ = true;
     owns_instance_ = true;
@@ -211,7 +182,7 @@ Status SmemBmBackend::initializeBackendLocked() {
     bm_config.createTimeout = timeout_s;
     bm_config.controlOperationTimeout = timeout_s;
 
-    ret = SmemBmUnderApi::Init(store_url_.c_str(), config_.world_size,
+    ret = SmemBmUnderApi::Init(config_.store_url.c_str(), config_.world_size,
                                device_id_, &bm_config);
     if (ret != smem_bm::kOk) {
         SmemBmUnderApi::UnloadLibrary();
@@ -272,18 +243,10 @@ void SmemBmBackend::resetAllocatorLocked() {
     allocations_.clear();
 }
 
-void SmemBmBackend::resetLayoutLocked() {
-    max_[0] = 0;
-    max_[1] = 0;
-    local_rank_ = 0;
-}
-
 void SmemBmBackend::shutdown() {
     std::lock_guard<std::mutex> lock(instance_mutex_);
     cleanupBackendLocked();
-    resetLayoutLocked();
     config_ = MemoryEngineConfig{};
-    store_url_.clear();
     if (owns_instance_) {
         instance_active_ = false;
         owns_instance_ = false;
@@ -296,7 +259,6 @@ Status SmemBmBackend::join() {
             "MemoryEngine is already joined" LOC_MARK);
     }
     if (!initialized_) {
-        CHECK_STATUS(prepareLayoutLocked());
         CHECK_STATUS(initializeBackendLocked());
     }
     const int32_t ret = SmemBmUnderApi::Join(handle_, 0);

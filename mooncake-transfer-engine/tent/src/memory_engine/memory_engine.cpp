@@ -16,12 +16,13 @@
 
 #include <glog/logging.h>
 
+#include <cstring>
 #include <memory>
 #include <mutex>
 #include <string>
 
 #include "tent/common/config.h"
-#include "backend/smem_bm_backend.h"
+#include "tent/memory_engine/backend/smem_bm_backend.h"
 
 namespace mooncake {
 namespace tent {
@@ -47,7 +48,7 @@ Status MemoryEngineConfig::fromConfig(const Config& config,
         return Status::InvalidArgument("out is null" LOC_MARK);
     }
     MemoryEngineConfig result;
-    result.enabled = config.get("memory_engine/enabled", true);
+    result.enabled_server = config.get("memory_engine/enabled_server", true);
     result.world_size = config.get<uint32_t>("memory_engine/world_size", 0);
     result.auto_ranking = config.get("memory_engine/auto_ranking", true);
     result.local_rank = config.get<uint32_t>("memory_engine/local_rank", 0);
@@ -56,6 +57,8 @@ Status MemoryEngineConfig::fromConfig(const Config& config,
         config.get<uint64_t>("memory_engine/device_mem_max", 0);
     result.join_timeout_ms =
         config.get<int64_t>("memory_engine/join_timeout_ms", 120000);
+    result.store_url = config.get("memory_engine/store_url", std::string());
+    if (result.store_url.empty()) result.store_url = DeriveStoreUrl(config);
     *out = result;
     return Status::OK();
 }
@@ -82,34 +85,17 @@ Status MemoryEngine::create(const MemoryEngineConfig& config,
         return Status::InvalidArgument("out is null" LOC_MARK);
     }
     *out = nullptr;
-    auto tent_config = std::make_shared<Config>();
-    CHECK_STATUS(ConfigHelper().loadFromEnv(*tent_config));
-    return create(std::move(tent_config), config, out);
-}
-
-Status MemoryEngine::create(std::shared_ptr<Config> tent_config,
-                            const MemoryEngineConfig& config,
-                            std::unique_ptr<MemoryEngine>* out) {
-    if (!out) {
-        return Status::InvalidArgument("out is null" LOC_MARK);
-    }
-    *out = nullptr;
-    if (!tent_config) {
-        return Status::InvalidArgument("tent_config is null" LOC_MARK);
-    }
-    if (!config.enabled) {
+    if (!config.enabled_server) {
         return Status::MemoryEngineDisabled(
-            "memory_engine/enabled is false" LOC_MARK);
+            "memory_engine/enabled_server is false" LOC_MARK);
     }
-    const std::string store_url = DeriveStoreUrl(*tent_config);
-    if (store_url.empty()) {
+    if (config.store_url.empty()) {
         return Status::InvalidArgument(
-            "metadata_servers is required when MemoryEngine is "
-            "enabled" LOC_MARK);
+            "memory_engine/store_url or metadata_servers is required" LOC_MARK);
     }
 
     auto backend = std::make_unique<SmemBmBackend>();
-    CHECK_STATUS(backend->create(store_url, config));
+    CHECK_STATUS(backend->create(config));
     *out = std::unique_ptr<MemoryEngine>(new MemoryEngine(std::move(backend)));
     return Status::OK();
 }
@@ -211,8 +197,9 @@ void tent_memory_engine_config_init(tent_memory_engine_config_t* config) {
     config->host_mem_max = 0;
     config->device_mem_max = 0;
     config->join_timeout_ms = 120000;
-    config->enabled = 1;
+    config->enabled_server = 1;
     config->auto_ranking = 1;
+    config->store_url[0] = '\0';
 }
 
 int tent_memory_engine_create(const tent_memory_engine_config_t* config,
@@ -229,9 +216,27 @@ int tent_memory_engine_create(const tent_memory_engine_config_t* config,
         engine_config.host_mem_max = config->host_mem_max;
         engine_config.device_mem_max = config->device_mem_max;
         engine_config.join_timeout_ms = config->join_timeout_ms;
-        engine_config.enabled = config->enabled != 0;
+        engine_config.enabled_server = config->enabled_server != 0;
         engine_config.auto_ranking = config->auto_ranking != 0;
-        status = mooncake::tent::MemoryEngine::create(engine_config, &engine);
+        engine_config.store_url.assign(
+            config->store_url,
+            strnlen(config->store_url, sizeof(config->store_url)));
+        if (engine_config.store_url.empty()) {
+            auto tent_config = std::make_shared<mooncake::tent::Config>();
+            status = mooncake::tent::ConfigHelper().loadFromEnv(*tent_config);
+            if (status.ok()) {
+                mooncake::tent::MemoryEngineConfig derived;
+                status = mooncake::tent::MemoryEngineConfig::fromConfig(
+                    *tent_config, &derived);
+                if (status.ok()) {
+                    engine_config.store_url = std::move(derived.store_url);
+                }
+            }
+        }
+        if (status.ok()) {
+            status =
+                mooncake::tent::MemoryEngine::create(engine_config, &engine);
+        }
     } else {
         auto tent_config = std::make_shared<mooncake::tent::Config>();
         status = mooncake::tent::ConfigHelper().loadFromEnv(*tent_config);
@@ -239,8 +244,8 @@ int tent_memory_engine_create(const tent_memory_engine_config_t* config,
             status = mooncake::tent::MemoryEngineConfig::fromConfig(
                 *tent_config, &engine_config);
             if (status.ok()) {
-                status = mooncake::tent::MemoryEngine::create(
-                    std::move(tent_config), engine_config, &engine);
+                status = mooncake::tent::MemoryEngine::create(engine_config,
+                                                              &engine);
             }
         }
     }

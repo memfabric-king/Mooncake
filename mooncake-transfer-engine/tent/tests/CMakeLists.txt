@@ -975,7 +975,7 @@ endif()
 add_library(mock_smem_bm SHARED memory_engine/mock_smem_bm.cpp)
 target_compile_features(mock_smem_bm PRIVATE cxx_std_20)
 target_include_directories(
-  mock_smem_bm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../src/memory_engine/backend
+  mock_smem_bm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include
                        ${CMAKE_CURRENT_SOURCE_DIR}/memory_engine)
 
 add_executable(
@@ -987,10 +987,8 @@ target_link_libraries(
   tent_memory_engine_test PRIVATE gtest gtest_main tent_common mock_smem_bm
                                   ${CMAKE_DL_LIBS})
 target_include_directories(
-  tent_memory_engine_test
-  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include
-          ${CMAKE_CURRENT_SOURCE_DIR}/memory_engine
-          ${CMAKE_CURRENT_SOURCE_DIR}/../src/memory_engine/backend)
+  tent_memory_engine_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include
+                                  ${CMAKE_CURRENT_SOURCE_DIR}/memory_engine)
 target_compile_definitions(
   tent_memory_engine_test
   PRIVATE MOCK_SMEM_BM_LIB="$<TARGET_FILE:mock_smem_bm>")

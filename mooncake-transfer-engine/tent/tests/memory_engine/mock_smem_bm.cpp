@@ -22,7 +22,7 @@
 #include <new>
 #include <string>
 
-#include "smem_bm_abi.h"
+#include "tent/memory_engine/backend/smem_bm_abi.h"
 
 namespace {
 
