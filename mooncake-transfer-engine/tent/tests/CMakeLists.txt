@@ -970,15 +970,26 @@ if(USE_MLU)
     "-Wl,--wrap=cnQueryQueue")
 endif()
 
-# MemoryEngine API/config unit tests. The backend is a stub in this change;
-# the MemFabric implementation lands in a follow-up.
+# MemoryEngine lifecycle/GVA-query tests with a mock libmf_smem.so.
+add_library(mock_smem_bm SHARED memory_engine/mock_smem_bm.cpp)
+target_compile_features(mock_smem_bm PRIVATE cxx_std_20)
+target_include_directories(mock_smem_bm
+                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+
 add_executable(
   tent_memory_engine_test
   memory_engine_test.cpp ../src/memory_engine/memory_engine.cpp
-  ../src/memory_engine/backend/memfabric_backend.cpp)
-target_link_libraries(tent_memory_engine_test PRIVATE gtest gtest_main
-                                                      tent_common)
-target_include_directories(tent_memory_engine_test
-                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+  ../src/memory_engine/backend/memfabric_backend.cpp
+  ../src/memory_engine/backend/smem_bm_api.cpp)
+target_link_libraries(
+  tent_memory_engine_test PRIVATE gtest gtest_main tent_common mock_smem_bm
+                                  ${CMAKE_DL_LIBS})
+target_include_directories(
+  tent_memory_engine_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include
+                                  ${CMAKE_CURRENT_SOURCE_DIR}/memory_engine)
+target_compile_definitions(
+  tent_memory_engine_test
+  PRIVATE MOCK_SMEM_BM_LIB="$<TARGET_FILE:mock_smem_bm>")
+add_dependencies(tent_memory_engine_test mock_smem_bm)
 add_test(NAME tent_memory_engine_test COMMAND tent_memory_engine_test)
 set_tests_properties(tent_memory_engine_test PROPERTIES TIMEOUT 120)
