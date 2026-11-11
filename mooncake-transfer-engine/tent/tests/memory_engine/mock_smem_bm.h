@@ -17,9 +17,17 @@
 
 #include <cstdint>
 
+// Any copy entry that uses this address fails in the mock library, which lets
+// tests exercise batchCopy's per-entry failure attribution.
+constexpr uintptr_t kMockSmemBmFailAddress = 0xdeadbeefULL;
+
 extern "C" {
 
 void mock_smem_bm_reset();
+
+// Observability helpers used by the unit tests.
+uint64_t mock_smem_bm_local_size(int mem_type);
+uint64_t mock_smem_bm_extend_calls(int mem_type);
 uint32_t mock_smem_bm_rank();
 int mock_smem_bm_joined();
 int mock_smem_bm_initialized();

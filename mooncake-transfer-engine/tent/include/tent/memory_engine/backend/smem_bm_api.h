@@ -44,8 +44,15 @@ class SmemBmUnderApi {
     static void Destroy(smem_bm::SmemBmHandle handle);
     static int32_t Join(smem_bm::SmemBmHandle handle, uint32_t flags);
     static int32_t Leave(smem_bm::SmemBmHandle handle, uint32_t flags);
+    static int32_t ExtendLocalMem(smem_bm::SmemBmHandle handle,
+                                  smem_bm::SmemMemType mem_type, uint64_t size);
+    static uint64_t GetLocalMemSize(smem_bm::SmemBmHandle handle,
+                                    smem_bm::SmemMemType mem_type);
     static void* PtrByMemType(smem_bm::SmemBmHandle handle,
                               smem_bm::SmemMemType mem_type, uint16_t rank);
+    static int32_t CopyBatch(smem_bm::SmemBmHandle handle,
+                             smem_bm::SmemBatchCopyParams* params,
+                             smem_bm::SmemCopyType type, uint32_t flags);
 
    private:
     using ConfigInitFn = int32_t (*)(smem_bm::SmemBmConfig*);
@@ -59,8 +66,15 @@ class SmemBmUnderApi {
     using DestroyFn = void (*)(smem_bm::SmemBmHandle);
     using JoinFn = int32_t (*)(smem_bm::SmemBmHandle, uint32_t);
     using LeaveFn = int32_t (*)(smem_bm::SmemBmHandle, uint32_t);
+    using ExtendLocalMemFn = int32_t (*)(smem_bm::SmemBmHandle,
+                                         smem_bm::SmemMemType, uint64_t);
+    using GetLocalMemSizeFn = uint64_t (*)(smem_bm::SmemBmHandle,
+                                           smem_bm::SmemMemType);
     using PtrByMemTypeFn = void* (*)(smem_bm::SmemBmHandle,
                                      smem_bm::SmemMemType, uint16_t);
+    using CopyBatchFn = int32_t (*)(smem_bm::SmemBmHandle,
+                                    smem_bm::SmemBatchCopyParams*,
+                                    smem_bm::SmemCopyType, uint32_t);
 
     static bool LoadLibraryLocked();
     static void ResetSymbols();
@@ -79,7 +93,10 @@ class SmemBmUnderApi {
     static DestroyFn destroy_;
     static JoinFn join_;
     static LeaveFn leave_;
+    static ExtendLocalMemFn extend_local_mem_;
+    static GetLocalMemSizeFn get_local_mem_size_;
     static PtrByMemTypeFn ptr_by_mem_type_;
+    static CopyBatchFn copy_batch_;
 };
 
 }  // namespace tent

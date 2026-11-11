@@ -45,7 +45,10 @@ SmemBmUnderApi::Create2Fn SmemBmUnderApi::create2_ = nullptr;
 SmemBmUnderApi::DestroyFn SmemBmUnderApi::destroy_ = nullptr;
 SmemBmUnderApi::JoinFn SmemBmUnderApi::join_ = nullptr;
 SmemBmUnderApi::LeaveFn SmemBmUnderApi::leave_ = nullptr;
+SmemBmUnderApi::ExtendLocalMemFn SmemBmUnderApi::extend_local_mem_ = nullptr;
+SmemBmUnderApi::GetLocalMemSizeFn SmemBmUnderApi::get_local_mem_size_ = nullptr;
 SmemBmUnderApi::PtrByMemTypeFn SmemBmUnderApi::ptr_by_mem_type_ = nullptr;
+SmemBmUnderApi::CopyBatchFn SmemBmUnderApi::copy_batch_ = nullptr;
 
 #define TENT_SMEM_BM_LOAD_SYM(field, name)                                 \
     do {                                                                   \
@@ -84,7 +87,11 @@ bool SmemBmUnderApi::LoadLibraryLocked() {
     TENT_SMEM_BM_LOAD_SYM(destroy_, "smem_bm_destroy");
     TENT_SMEM_BM_LOAD_SYM(join_, "smem_bm_join");
     TENT_SMEM_BM_LOAD_SYM(leave_, "smem_bm_leave");
+    TENT_SMEM_BM_LOAD_SYM(extend_local_mem_, "smem_bm_extend_local_mem");
+    TENT_SMEM_BM_LOAD_SYM(get_local_mem_size_,
+                          "smem_bm_get_local_mem_size_by_mem_type");
     TENT_SMEM_BM_LOAD_SYM(ptr_by_mem_type_, "smem_bm_ptr_by_mem_type");
+    TENT_SMEM_BM_LOAD_SYM(copy_batch_, "smem_bm_copy_batch");
 
     if (!ok) {
         dlclose(library_);
@@ -118,7 +125,10 @@ void SmemBmUnderApi::ResetSymbols() {
     destroy_ = nullptr;
     join_ = nullptr;
     leave_ = nullptr;
+    extend_local_mem_ = nullptr;
+    get_local_mem_size_ = nullptr;
     ptr_by_mem_type_ = nullptr;
+    copy_batch_ = nullptr;
 }
 
 int32_t SmemBmUnderApi::ConfigInit(smem_bm::SmemBmConfig* config) {
@@ -162,11 +172,30 @@ int32_t SmemBmUnderApi::Leave(smem_bm::SmemBmHandle handle, uint32_t flags) {
     return leave_ ? leave_(handle, flags) : smem_bm::kError;
 }
 
+int32_t SmemBmUnderApi::ExtendLocalMem(smem_bm::SmemBmHandle handle,
+                                       smem_bm::SmemMemType mem_type,
+                                       uint64_t size) {
+    return extend_local_mem_ ? extend_local_mem_(handle, mem_type, size)
+                             : smem_bm::kError;
+}
+
+uint64_t SmemBmUnderApi::GetLocalMemSize(smem_bm::SmemBmHandle handle,
+                                         smem_bm::SmemMemType mem_type) {
+    return get_local_mem_size_ ? get_local_mem_size_(handle, mem_type) : 0;
+}
+
 void* SmemBmUnderApi::PtrByMemType(smem_bm::SmemBmHandle handle,
                                    smem_bm::SmemMemType mem_type,
                                    uint16_t rank) {
     return ptr_by_mem_type_ ? ptr_by_mem_type_(handle, mem_type, rank)
                             : nullptr;
+}
+
+int32_t SmemBmUnderApi::CopyBatch(smem_bm::SmemBmHandle handle,
+                                  smem_bm::SmemBatchCopyParams* params,
+                                  smem_bm::SmemCopyType type, uint32_t flags) {
+    return copy_batch_ ? copy_batch_(handle, params, type, flags)
+                       : smem_bm::kError;
 }
 
 }  // namespace tent

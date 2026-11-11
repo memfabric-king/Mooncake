@@ -55,6 +55,21 @@ Status SmemStatus(int32_t ret, const char* operation) {
     }
 }
 
+int32_t SmemToMemoryEngineError(int32_t ret) {
+    switch (ret) {
+        case smem_bm::kOk:
+            return MEMORY_ENGINE_SUCCESS;
+        case smem_bm::kInvalidParam:
+            return MEMORY_ENGINE_E_INVALID_ARG;
+        case smem_bm::kTimeout:
+            return MEMORY_ENGINE_E_TIMEOUT;
+        case smem_bm::kNotInitialized:
+            return MEMORY_ENGINE_E_NOT_JOINED;
+        default:
+            return MEMORY_ENGINE_E_BACKEND;
+    }
+}
+
 }  // namespace
 
 MemfabricBackend::~MemfabricBackend() { shutdown(); }
@@ -265,20 +280,109 @@ Status MemfabricBackend::rankOfGva(const void* gva, uint32_t* rank_out) const {
     return Status::OK();
 }
 
-Status MemfabricBackend::allocate(uint64_t, MemoryEngineMemType, void**) {
-    return Status::MemoryEngineUnsupported(
-        "allocate is implemented in a follow-up change" LOC_MARK);
+Status MemfabricBackend::allocate(uint64_t size, MemoryEngineMemType type,
+                                  void** gva_out) {
+    if (!gva_out) {
+        return Status::InvalidArgument("gva_out is null" LOC_MARK);
+    }
+    *gva_out = nullptr;
+    if (!joined_) {
+        return Status::MemoryEngineNotJoined(
+            "MemoryEngine must be joined before allocate" LOC_MARK);
+    }
+
+    const auto mem_type = toSmemMemType(type);
+    const uint64_t offset = SmemBmUnderApi::GetLocalMemSize(handle_, mem_type);
+    const int32_t ret = SmemBmUnderApi::ExtendLocalMem(handle_, mem_type, size);
+    if (ret != smem_bm::kOk) {
+        return SmemStatus(ret, "smem_bm_extend_local_mem");
+    }
+
+    void* base = SmemBmUnderApi::PtrByMemType(
+        handle_, mem_type, static_cast<uint16_t>(local_rank_));
+    if (!base) {
+        return Status::MemoryEngineBackendError(
+            "failed to resolve the local GVA base" LOC_MARK);
+    }
+    *gva_out = static_cast<uint8_t*>(base) + offset;
+    return Status::OK();
 }
 
-Status MemfabricBackend::free(void*) {
-    return Status::MemoryEngineUnsupported(
-        "free is implemented in a follow-up change" LOC_MARK);
+Status MemfabricBackend::free(void* gva) {
+    (void)gva;
+    return Status::OK();
 }
 
-Status MemfabricBackend::batchCopy(const std::vector<MemoryEngineCopyEntry>&,
-                                   std::vector<int32_t>*) {
-    return Status::MemoryEngineUnsupported(
-        "batchCopy is implemented in a follow-up change" LOC_MARK);
+Status MemfabricBackend::batchCopy(
+    const std::vector<MemoryEngineCopyEntry>& entries,
+    std::vector<int32_t>* results) {
+    if (!results) {
+        return Status::InvalidArgument("results is null" LOC_MARK);
+    }
+    results->assign(entries.size(), MEMORY_ENGINE_SUCCESS);
+    if (!joined_) {
+        for (auto& result : *results) result = MEMORY_ENGINE_E_NOT_JOINED;
+        return Status::MemoryEngineNotJoined(
+            "MemoryEngine must be joined before batchCopy" LOC_MARK);
+    }
+    if (entries.empty()) return Status::OK();
+    if (entries.size() > std::numeric_limits<uint32_t>::max()) {
+        for (auto& result : *results) result = MEMORY_ENGINE_E_INVALID_ARG;
+        return Status::InvalidArgument(
+            "batchCopy entry count exceeds the backend limit" LOC_MARK);
+    }
+
+    std::vector<void*> sources;
+    std::vector<void*> destinations;
+    std::vector<uint64_t> sizes;
+    std::vector<size_t> indices;
+    sources.reserve(entries.size());
+    destinations.reserve(entries.size());
+    sizes.reserve(entries.size());
+    indices.reserve(entries.size());
+    for (size_t i = 0; i < entries.size(); ++i) {
+        const auto& entry = entries[i];
+        if (!entry.src || !entry.dst || entry.size == 0) {
+            (*results)[i] = MEMORY_ENGINE_E_INVALID_ARG;
+            continue;
+        }
+        sources.push_back(const_cast<void*>(entry.src));
+        destinations.push_back(entry.dst);
+        sizes.push_back(entry.size);
+        indices.push_back(i);
+    }
+    if (indices.empty()) return Status::OK();
+
+    smem_bm::SmemBatchCopyParams params{
+        sources.data(), destinations.data(), sizes.data(),
+        static_cast<uint32_t>(sources.size()), nullptr};
+    const int32_t ret =
+        SmemBmUnderApi::CopyBatch(handle_, &params, smem_bm::kCopyAuto, 0);
+    if (ret == smem_bm::kOk) return Status::OK();
+
+    // The vendor batch call reports one status for the whole batch. Retry each
+    // entry on its own so a single bad address does not hide the successes.
+    LOG(WARNING) << "smem_bm_copy_batch failed with " << ret
+                 << "; retrying entries individually to attribute failures";
+    bool any_success = false;
+    for (size_t i = 0; i < indices.size(); ++i) {
+        void* source = sources[i];
+        void* destination = destinations[i];
+        uint64_t size = sizes[i];
+        smem_bm::SmemBatchCopyParams single{&source, &destination, &size, 1,
+                                            nullptr};
+        const int32_t entry_ret =
+            SmemBmUnderApi::CopyBatch(handle_, &single, smem_bm::kCopyAuto, 0);
+        (*results)[indices[i]] = SmemToMemoryEngineError(entry_ret);
+        any_success = any_success || entry_ret == smem_bm::kOk;
+    }
+    // Per-entry problems (bad addresses) belong in results[] and do not make
+    // the call itself fail. When every entry failed and the batch error is a
+    // lifecycle/backend problem, surface it as the overall status as well.
+    if (!any_success && ret != smem_bm::kInvalidParam) {
+        return SmemStatus(ret, "smem_bm_copy_batch");
+    }
+    return Status::OK();
 }
 
 }  // namespace tent

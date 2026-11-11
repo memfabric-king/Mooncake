@@ -970,11 +970,13 @@ if(USE_MLU)
     "-Wl,--wrap=cnQueryQueue")
 endif()
 
-# MemoryEngine lifecycle/GVA-query tests with a mock libmf_smem.so.
+# MemoryEngine unit tests. The mock libmf_smem.so is a real shared library so
+# the dlopen-based backend is exercised end to end without Ascend hardware.
 add_library(mock_smem_bm SHARED memory_engine/mock_smem_bm.cpp)
 target_compile_features(mock_smem_bm PRIVATE cxx_std_20)
-target_include_directories(mock_smem_bm
-                           PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include)
+target_include_directories(
+  mock_smem_bm PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../include
+                       ${CMAKE_CURRENT_SOURCE_DIR}/memory_engine)
 
 add_executable(
   tent_memory_engine_test
