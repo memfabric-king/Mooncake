@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include "tent/memory_engine/backend/smem_bm_backend.h"
+#include "tent/memory_engine/backend/memfabric_backend.h"
 
 #include <cstdlib>
 #include <cstring>
@@ -72,9 +72,9 @@ int32_t SmemToMemoryEngineError(int32_t ret) {
 
 }  // namespace
 
-SmemBmBackend::~SmemBmBackend() { shutdown(); }
+MemfabricBackend::~MemfabricBackend() { shutdown(); }
 
-int SmemBmBackend::typeIndex(MemoryEngineMemType type) {
+int MemfabricBackend::typeIndex(MemoryEngineMemType type) {
     switch (type) {
         case MemoryEngineMemType::Host:
             return 0;
@@ -84,16 +84,16 @@ int SmemBmBackend::typeIndex(MemoryEngineMemType type) {
     return -1;
 }
 
-smem_bm::SmemMemType SmemBmBackend::toSmemMemType(MemoryEngineMemType type) {
+smem_bm::SmemMemType MemfabricBackend::toSmemMemType(MemoryEngineMemType type) {
     return type == MemoryEngineMemType::Device ? smem_bm::kGlobalDevice
                                                : smem_bm::kGlobalHost;
 }
 
-Status SmemBmBackend::create(const MemoryEngineConfig& config) {
+Status MemfabricBackend::create(const MemoryEngineConfig& config) {
     std::lock_guard<std::mutex> lock(instance_mutex_);
     if (instance_active_) {
         return Status::InvalidArgument(
-            "this SmemBmBackend is already created" LOC_MARK);
+            "this MemfabricBackend is already created" LOC_MARK);
     }
     if (config.store_url.empty()) {
         return Status::InvalidArgument(
@@ -112,7 +112,7 @@ Status SmemBmBackend::create(const MemoryEngineConfig& config) {
     return Status::OK();
 }
 
-Status SmemBmBackend::initializeBackendLocked() {
+Status MemfabricBackend::initializeBackendLocked() {
     if (initialized_) return Status::OK();
 
     if (!SmemBmUnderApi::LoadLibrary()) {
@@ -172,7 +172,7 @@ Status SmemBmBackend::initializeBackendLocked() {
     return Status::OK();
 }
 
-void SmemBmBackend::cleanupBackendLocked() {
+void MemfabricBackend::cleanupBackendLocked() {
     if (handle_) {
         SmemBmUnderApi::Destroy(handle_);
         handle_ = nullptr;
@@ -190,14 +190,14 @@ void SmemBmBackend::cleanupBackendLocked() {
     local_rank_ = 0;
 }
 
-void SmemBmBackend::shutdown() {
+void MemfabricBackend::shutdown() {
     std::lock_guard<std::mutex> lock(instance_mutex_);
     cleanupBackendLocked();
     config_ = MemoryEngineConfig{};
     instance_active_ = false;
 }
 
-Status SmemBmBackend::join() {
+Status MemfabricBackend::join() {
     if (joined_) {
         return Status::MemoryEngineAlreadyJoined(
             "MemoryEngine is already joined" LOC_MARK);
@@ -211,7 +211,7 @@ Status SmemBmBackend::join() {
     return Status::OK();
 }
 
-Status SmemBmBackend::leave() {
+Status MemfabricBackend::leave() {
     if (!joined_) {
         return Status::MemoryEngineNotJoined(
             "MemoryEngine is not joined" LOC_MARK);
@@ -222,7 +222,7 @@ Status SmemBmBackend::leave() {
     return Status::OK();
 }
 
-Status SmemBmBackend::getLocalRank(uint32_t* rank_out) const {
+Status MemfabricBackend::getLocalRank(uint32_t* rank_out) const {
     if (!rank_out) {
         return Status::InvalidArgument("rank_out is null" LOC_MARK);
     }
@@ -234,8 +234,8 @@ Status SmemBmBackend::getLocalRank(uint32_t* rank_out) const {
     return Status::OK();
 }
 
-Status SmemBmBackend::gvaBase(MemoryEngineMemType type, uint32_t rank,
-                              void** gva_out) const {
+Status MemfabricBackend::gvaBase(MemoryEngineMemType type, uint32_t rank,
+                                 void** gva_out) const {
     if (!gva_out) {
         return Status::InvalidArgument("gva_out is null" LOC_MARK);
     }
@@ -261,7 +261,7 @@ Status SmemBmBackend::gvaBase(MemoryEngineMemType type, uint32_t rank,
     return Status::OK();
 }
 
-Status SmemBmBackend::rankOfGva(const void* gva, uint32_t* rank_out) const {
+Status MemfabricBackend::rankOfGva(const void* gva, uint32_t* rank_out) const {
     if (!gva || !rank_out) {
         return Status::InvalidArgument(
             "gva and rank_out are required" LOC_MARK);
@@ -280,8 +280,8 @@ Status SmemBmBackend::rankOfGva(const void* gva, uint32_t* rank_out) const {
     return Status::OK();
 }
 
-Status SmemBmBackend::allocate(uint64_t size, MemoryEngineMemType type,
-                               void** gva_out) {
+Status MemfabricBackend::allocate(uint64_t size, MemoryEngineMemType type,
+                                  void** gva_out) {
     if (!gva_out) {
         return Status::InvalidArgument("gva_out is null" LOC_MARK);
     }
@@ -308,12 +308,12 @@ Status SmemBmBackend::allocate(uint64_t size, MemoryEngineMemType type,
     return Status::OK();
 }
 
-Status SmemBmBackend::free(void* gva) {
+Status MemfabricBackend::free(void* gva) {
     (void)gva;
     return Status::OK();
 }
 
-Status SmemBmBackend::batchCopy(
+Status MemfabricBackend::batchCopy(
     const std::vector<MemoryEngineCopyEntry>& entries,
     std::vector<int32_t>* results) {
     if (!results) {

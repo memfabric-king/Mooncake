@@ -29,13 +29,13 @@ namespace tent {
 // Backend that owns the GVA layout, the local allocator, and the smem_bm
 // lifecycle. The facade above it only validates arguments and serializes
 // calls; all address arithmetic lives here.
-class SmemBmBackend {
+class MemfabricBackend {
    public:
-    SmemBmBackend() = default;
-    ~SmemBmBackend();
+    MemfabricBackend() = default;
+    ~MemfabricBackend();
 
-    SmemBmBackend(const SmemBmBackend&) = delete;
-    SmemBmBackend& operator=(const SmemBmBackend&) = delete;
+    MemfabricBackend(const MemfabricBackend&) = delete;
+    MemfabricBackend& operator=(const MemfabricBackend&) = delete;
 
     // Loads libmf_smem.so, initializes the config store, and creates the local
     // Big Memory segment (but does not join the global pool). The control-plane

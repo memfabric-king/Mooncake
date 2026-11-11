@@ -981,7 +981,7 @@ target_include_directories(
 add_executable(
   tent_memory_engine_test
   memory_engine_test.cpp ../src/memory_engine/memory_engine.cpp
-  ../src/memory_engine/backend/smem_bm_backend.cpp
+  ../src/memory_engine/backend/memfabric_backend.cpp
   ../src/memory_engine/backend/smem_bm_api.cpp)
 target_link_libraries(
   tent_memory_engine_test PRIVATE gtest gtest_main tent_common mock_smem_bm

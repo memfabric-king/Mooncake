@@ -22,7 +22,7 @@
 #include <string>
 
 #include "tent/common/config.h"
-#include "tent/memory_engine/backend/smem_bm_backend.h"
+#include "tent/memory_engine/backend/memfabric_backend.h"
 
 namespace mooncake {
 namespace tent {
@@ -63,7 +63,7 @@ Status MemoryEngineConfig::fromConfig(const Config& config,
     return Status::OK();
 }
 
-MemoryEngine::MemoryEngine(std::unique_ptr<SmemBmBackend> backend)
+MemoryEngine::MemoryEngine(std::unique_ptr<MemfabricBackend> backend)
     : backend_(std::move(backend)) {}
 
 MemoryEngine::~MemoryEngine() {
@@ -94,7 +94,7 @@ Status MemoryEngine::create(const MemoryEngineConfig& config,
             "memory_engine/store_url or metadata_servers is required" LOC_MARK);
     }
 
-    auto backend = std::make_unique<SmemBmBackend>();
+    auto backend = std::make_unique<MemfabricBackend>();
     CHECK_STATUS(backend->create(config));
     *out = std::unique_ptr<MemoryEngine>(new MemoryEngine(std::move(backend)));
     return Status::OK();

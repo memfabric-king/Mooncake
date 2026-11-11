@@ -127,7 +127,7 @@ namespace mooncake {
 namespace tent {
 
 class Config;
-class SmemBmBackend;
+class MemfabricBackend;
 
 enum class MemoryEngineMemType { Host = 0, Device = 1 };
 
@@ -241,9 +241,9 @@ class MemoryEngine {
     Status unregisterMemory(void* gva);
 
    private:
-    explicit MemoryEngine(std::unique_ptr<SmemBmBackend> backend);
+    explicit MemoryEngine(std::unique_ptr<MemfabricBackend> backend);
 
-    std::unique_ptr<SmemBmBackend> backend_;
+    std::unique_ptr<MemfabricBackend> backend_;
     bool joined_{false};
     mutable std::shared_mutex mutex_;
 };
