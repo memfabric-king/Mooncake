@@ -1,29 +1,17 @@
-name: Release Memfabric
+name: Build MemFabric wheel
 
 on:
-  push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release tag containing MEMFABRIC_BUILD packaging support (e.g. v0.1.0)'
-        required: true
-        type: string
+  workflow_dispatch: {}
 
 jobs:
   build:
-    if: ${{ (github.event_name == 'push' && !contains(github.ref_name, '-')) || (github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'v') && !contains(inputs.tag, '-')) }}
 
     strategy:
       max-parallel: 2
       matrix:
-        arch: [aarch64, x86_64]
-        python-version: ['3.9', '3.10', '3.11', '3.12', '3.13']
+        arch: [x86_64]
+        python-version: ['3.12']
         include:
-          - arch: aarch64
-            runner: ubuntu-22.04-arm
-            cann_arch: aarch64
           - arch: x86_64
             runner: ubuntu-22.04
             cann_arch: x86_64
@@ -31,7 +19,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
 
     permissions:
-      contents: write
+      contents: read
 
     env:
       MEMFABRIC_BUILD: "1"
@@ -40,7 +28,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
+          ref: 8153dc773feb22a7e5b84cd34853b241dfb938ab
+          persist-credentials: false
           fetch-depth: 0
           submodules: recursive
 
@@ -169,44 +158,3 @@ jobs:
           name: mooncake-wheel-memfabric-${{ matrix.arch }}-py${{ steps.generate_tag_release.outputs.python_version_tag }}
           path: mooncake-wheel/dist-memfabric-py${{ steps.generate_tag_release.outputs.python_version_tag }}/*.whl
           if-no-files-found: error
-
-  publish-release:
-    if: ${{ (github.event_name == 'push' && !contains(github.ref_name, '-')) || (github.event_name == 'workflow_dispatch' && startsWith(inputs.tag, 'v') && !contains(inputs.tag, '-')) }}
-    needs: build
-    runs-on: ubuntu-22.04
-    environment: pypi
-
-    permissions:
-      contents: write
-      id-token: write
-
-    steps:
-      - name: Checkout source
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && format('refs/tags/{0}', inputs.tag) || github.ref }}
-
-      - name: Download all wheel artifacts
-        uses: actions/download-artifact@v4
-        with:
-          path: mooncake-wheel/dist-all
-          pattern: mooncake-wheel-memfabric-*
-
-      - name: Prepare wheels for release
-        run: |
-          mkdir -p mooncake-wheel/dist-release
-          find mooncake-wheel/dist-all -name "*.whl" -exec cp {} mooncake-wheel/dist-release/ \;
-          echo "Collected wheels for release:"
-          ls -la mooncake-wheel/dist-release/
-
-      - name: Upload wheels to GitHub Release
-        uses: softprops/action-gh-release@v1
-        with:
-          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-          files: mooncake-wheel/dist-release/*.whl
-
-      - name: Publish package to PyPI
-        if: github.repository == 'kvcache-ai/Mooncake'
-        uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          packages-dir: mooncake-wheel/dist-release/
